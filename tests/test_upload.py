@@ -77,7 +77,9 @@ class UploadIsolationTests(unittest.TestCase):
 
     def test_upload_status_reports_processing_then_returns_to_idle(self):
         client = self.client()
+        other_session = self.client()
         self.assertEqual(client.get("/api/upload/status").json()["stage"], "idle")
+        self.assertEqual(other_session.get("/api/upload/status").json()["stage"], "idle")
         original_build = server._build_document_state
         original_mkstemp = server.tempfile.mkstemp
         observed_stages = []
@@ -86,12 +88,14 @@ class UploadIsolationTests(unittest.TestCase):
             response = client.get("/api/upload/status")
             self.assertEqual(response.status_code, 200)
             observed_stages.append(response.json()["stage"])
+            self.assertEqual(other_session.get("/api/upload/status").json()["stage"], "idle")
             return original_mkstemp(*args, **kwargs)
 
         def observe_processing(path, filename):
             response = client.get("/api/upload/status")
             self.assertEqual(response.status_code, 200)
             observed_stages.append(response.json()["stage"])
+            self.assertEqual(other_session.get("/api/upload/status").json()["stage"], "idle")
             return original_build(path, filename)
 
         with mock.patch.object(server.tempfile, "mkstemp", side_effect=observe_staging):

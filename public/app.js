@@ -192,6 +192,7 @@ let citationPendingHighlight = null;
     let conversations = [];
     let activeConversationId = null;
     let conversationSaveQueue = Promise.resolve();
+    let conversationSavePending = false;
     let conversationStateReady = Promise.resolve();
     let conversationDocumentHash = null;
     let activeHistoryPopoverCleanup = null;
@@ -1393,7 +1394,11 @@ let citationPendingHighlight = null;
                         polling = false;
                         break;
                     }
-                    const status = await statusRes.json();
+                    const status = await readJsonResponseSafely(statusRes);
+                    if (!status) {
+                        polling = false;
+                        break;
+                    }
                     if (!uploadSettled && (status.stage === 'uploading' || status.stage === 'processing')) {
                         setPdfUploadStatus('processing', `Processing PDF… ${file.name}`);
                     }
@@ -1418,13 +1423,13 @@ let citationPendingHighlight = null;
             uploadSettled = true;
             polling = false;
 
-            const data = await res.json().catch(() => ({}));
+            const data = await readJsonResponseSafely(res) || {};
             if (res.ok && data.success) {
                 documentRevision += 1;
                 conversations = [];
                 activeConversationId = null;
-                createNewConversation();
                 updateDocumentUI(data.document);
+                createNewConversation();
                 setPdfUploadStatus('ready', 'PDF ready — you can start chatting');
                 try {
                     await loadPdfDocument('/api/pdf', data.document.filename);
@@ -1432,19 +1437,25 @@ let citationPendingHighlight = null;
                     console.error('PDF preview could not be loaded:', renderError);
                 }
             } else {
-                const errorMessage = data.detail || 'Failed to upload PDF.';
+                const errorMessage = res.status === 502 || res.status === 503 || res.status === 504
+                    ? `The upload service returned HTTP ${res.status}. Reload to verify the active PDF before retrying.`
+                    : data.detail || `PDF upload failed (HTTP ${res.status}).`;
                 setPdfUploadStatus('error', errorMessage);
                 showGlobalAlert(errorMessage, 'error');
             }
         } catch (err) {
             console.error('PDF upload error:', err);
-            const errorMessage = 'Could not upload or process the PDF. Check your connection and try again.';
+            const errorMessage = 'Upload completion could not be confirmed. Check the active PDF before retrying.';
             setPdfUploadStatus('error', errorMessage);
             showGlobalAlert(errorMessage, 'error');
         } finally {
             uploadSettled = true;
             polling = false;
             pdfUploadInProgress = false;
+            if (conversationSavePending) {
+                conversationSavePending = false;
+                saveConversations();
+            }
         }
     }
 
@@ -1454,6 +1465,17 @@ let citationPendingHighlight = null;
         pdfUploadStatus.dataset.state = state;
         pdfUploadStatus.setAttribute('aria-busy', ['preparing', 'uploading', 'processing'].includes(state) ? 'true' : 'false');
         pdfUploadStatusText.textContent = message;
+    }
+
+    async function readJsonResponseSafely(response) {
+        const contentType = response.headers?.get('content-type') || '';
+        if (!contentType.toLowerCase().includes('json')) return null;
+        try {
+            const payload = await response.json();
+            return payload && typeof payload === 'object' ? payload : null;
+        } catch (error) {
+            return null;
+        }
     }
 
     function showRemoveConfirmModal() {
@@ -3044,6 +3066,10 @@ let citationPendingHighlight = null;
     }
 
     function saveConversations() {
+        if (pdfUploadInProgress) {
+            conversationSavePending = true;
+            return;
+        }
         const body = JSON.stringify({ conversations, document_hash: conversationDocumentHash });
         conversationSaveQueue = conversationSaveQueue
             .catch(() => {})
