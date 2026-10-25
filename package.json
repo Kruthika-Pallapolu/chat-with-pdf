@@ -1,0 +1,25 @@
+{
+  "name": "cwp-chat-with-pdf",
+  "version": "1.0.0",
+  "description": "Educational RAG application to Chat with PDF using semantic search and Gemini AI",
+  "main": "server.py",
+  "scripts": {
+    "start": "python3 server.py",
+    "dev": "python3 server.py",
+    "server": "uvicorn server:app --reload --port 8000"
+  },
+  "keywords": [
+    "rag",
+    "chat-with-pdf",
+    "gemini",
+    "sentence-transformers",
+    "embeddings",
+    "python",
+    "fastapi"
+  ],
+  "author": "CWP Student Project",
+  "license": "MIT",
+  "dependencies": {
+    "jsdom": "^29.1.1"
+  }
+}
