@@ -38,7 +38,7 @@ from storage import (
     get_file_hash,
 )
 from document_search import find_module_headings, get_structural_answer
-from citations import parse_sources_line, build_citations
+from citations import parse_sources_line, build_citations, filter_supported_answer
 from generator import (
     retrieve,
     generate_answer,
@@ -847,8 +847,6 @@ def _chat(req: QuestionRequest, session_id):
     answer, cited_idx, rejected_ids = parse_sources_line(answer, len(results))
     if rejected_ids:
         print(f"[CWP Citations] Ignored invalid source ids from model: {rejected_ids}")
-    citations = build_citations(answer, results, cited_idx, doc_state.page_texts)
-
     fallback_phrase = (answer or "").lower()
     if (
         "does not contain information" in fallback_phrase
@@ -863,6 +861,19 @@ def _chat(req: QuestionRequest, session_id):
         return _insufficient_evidence_response(
             "I couldn't find enough supporting evidence in your PDF to answer this question reliably. Ask Gemini instead?"
         )
+
+    answer, supported_indexes, has_unsupported_parts = filter_supported_answer(answer, results)
+    if not answer:
+        return _insufficient_evidence_response(
+            "I couldn't verify enough information in your PDF to answer this question. Would you like Gemini to answer using its general knowledge instead?"
+        )
+    if has_unsupported_parts:
+        answer = (
+            answer.rstrip()
+            + "\n\nSome parts of your question were not supported by the PDF and were omitted."
+        )
+
+    citations = build_citations(answer, results, supported_indexes, doc_state.page_texts)
 
     # Never expose a page badge unless the answer contains verified support from it.
     pages = sorted(set(
@@ -1114,7 +1125,7 @@ def chat_fallback(req: QuestionRequest, request: Request):
 
         return {
             "answer": answer,
-            "source_label": "Gemini General Knowledge",
+            "source_label": "Gemini general knowledge",
             "found_in_pdf": False,
             "memory_applied": bool(active_memory)
         }
@@ -1122,11 +1133,21 @@ def chat_fallback(req: QuestionRequest, request: Request):
         raise
     except Exception as error:
         logger.error("Gemini fallback failed (%s).", type(error).__name__)
-        raise HTTPException(status_code=503, detail="Gemini fallback is temporarily unavailable. Please retry.") from None
+        error_text = str(error).lower()
+        if "429" in error_text or "quota" in error_text or "resourceexhausted" in error_text:
+            status_code = 429
+            detail = "Gemini rate limit or quota reached. Please wait a moment and try again."
+        elif "503" in error_text or "unavailable" in error_text or "timeout" in error_text:
+            status_code = 503
+            detail = "Gemini is temporarily unavailable. Please retry shortly."
+        else:
+            status_code = 503
+            detail = "Gemini fallback is temporarily unavailable. Please retry."
+        raise HTTPException(status_code=status_code, detail=detail) from None
 
 FRONTEND_DIR = os.path.join(PROJECT_ROOT, "public")
 os.makedirs(FRONTEND_DIR, exist_ok=True)
-STATIC_ASSETS = {"style.css", "cwp-mark.svg", "app.js", "highlight.js", "markdown.js"}
+STATIC_ASSETS = {"style.css", "cwp-mark.svg", "cwp-favicon.svg", "app.js", "highlight.js", "markdown.js"}
 
 
 @app.get("/static/{asset_path:path}")

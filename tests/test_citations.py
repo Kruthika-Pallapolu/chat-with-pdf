@@ -1,6 +1,6 @@
 import os, sys, types, unittest
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-from citations import parse_sources_line, find_evidence, build_citations
+from citations import parse_sources_line, find_evidence, build_citations, filter_supported_answer
 
 CH1 = ("Records must be retained for seven years after account closure. "
        "Archived records are reviewed annually by the compliance team.")
@@ -67,6 +67,40 @@ class Build(unittest.TestCase):
         self.assertIsNone(build_citations(self.ANSWER, RESULTS, [0], pt2)[0]["position_hint"])
         self.assertIsNone(build_citations(self.ANSWER, RESULTS, [0], None)[0]["position_hint"])
 
+class AnswerSupport(unittest.TestCase):
+    def test_unsupported_sentences_are_removed_and_supported_chunks_returned(self):
+        answer, indexes, omitted = filter_supported_answer(
+            "Records must be retained for seven years after account closure. "
+            "The policy is identical in every country.", RESULTS
+        )
+        self.assertEqual(answer, "Records must be retained for seven years after account closure.")
+        self.assertEqual(indexes, [0])
+        self.assertTrue(omitted)
+
+    def test_partially_supported_answer_keeps_the_supported_portion(self):
+        answer, indexes, omitted = filter_supported_answer(
+            "Archived records are reviewed annually by the compliance team. "
+            "The review is conducted by an outside auditor.", RESULTS
+        )
+        self.assertEqual(answer, "Archived records are reviewed annually by the compliance team.")
+        self.assertEqual(indexes, [0])
+        self.assertTrue(omitted)
+
+    def test_fully_unsupported_answer_is_rejected(self):
+        answer, indexes, omitted = filter_supported_answer(
+            "The weather tomorrow will be sunny with mild wind.", RESULTS
+        )
+        self.assertEqual((answer, indexes, omitted), ("", [], True))
+
+    def test_unsupported_claim_inside_a_supported_sentence_is_removed(self):
+        answer, indexes, omitted = filter_supported_answer(
+            "Records must be retained for seven years after account closure, "
+            "and international law requires this in every country.", RESULTS
+        )
+        self.assertEqual(answer, "")
+        self.assertEqual(indexes, [])
+        self.assertTrue(omitted)
+
 # ---- integration: real server.chat() with heavy deps stubbed -------------
 def _load_server(retrieve_results, model_answer):
     stub = lambda name, **kw: sys.modules.setdefault(name, types.ModuleType(name))
@@ -128,19 +162,35 @@ class ServerChat(unittest.TestCase):
     def test_invented_id_gives_no_citation(self):
         r = self._chat("Records must be retained for seven years after account closure.\nSOURCES: S9")
         self.assertEqual(r["answer"], "Records must be retained for seven years after account closure.")
-        self.assertEqual(r["citations"], [])
-        self.assertEqual(r["sources"], [])
-    def test_missing_sources_line_gives_no_citation_even_though_chunk0_scores_highest(self):
+        self.assertEqual(r["sources"], [3])
+        self.assertTrue(r["citations"][0]["evidence_verified"])
+    def test_missing_sources_line_only_cites_lexically_supported_chunks(self):
         r = self._chat("Records must be retained for seven years after account closure.")
         self.assertEqual(r["answer"], "Records must be retained for seven years after account closure.")
-        self.assertEqual(r["citations"], [])
-        self.assertEqual(r["sources"], [])
-    def test_wrong_chunk_cited_is_not_verified(self):
+        self.assertEqual(r["sources"], [3])
+        self.assertTrue(r["citations"][0]["evidence_verified"])
+    def test_wrong_model_citation_does_not_override_verified_support(self):
         r = self._chat("Records must be retained for seven years after account closure.\nSOURCES: S3")
         self.assertEqual(len(r["citations"]), 1)
-        self.assertFalse(r["citations"][0]["evidence_verified"])
-        self.assertIsNone(r["citations"][0]["evidence"])
-        self.assertEqual(r["sources"], [])
+        self.assertTrue(r["citations"][0]["evidence_verified"])
+        self.assertEqual(r["citations"][0]["page"], 3)
+        self.assertEqual(r["sources"], [3])
+
+    def test_partially_supported_generation_omits_unsupported_claims(self):
+        answer = (
+            "Records must be retained for seven years after account closure. "
+            "The rule is required by international law."
+        )
+        r = self._chat(answer)
+        self.assertIn("seven years", r["answer"])
+        self.assertNotIn("international law", r["answer"])
+        self.assertIn("not supported by the PDF", r["answer"])
+        self.assertEqual(r["sources"], [3])
+
+    def test_unverifiable_generation_requires_explicit_fallback(self):
+        r = self._chat("The weather tomorrow will be sunny with mild wind.")
+        self.assertIsNone(r["answer"])
+        self.assertTrue(r["requires_fallback"])
     def test_insufficient_pdf_evidence_requires_explicit_user_fallback(self):
         srv = _load_server([], "ignored")
         srv._get_document_state = lambda _sid: srv.DocumentState(

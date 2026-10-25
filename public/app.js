@@ -794,6 +794,7 @@ let citationPendingHighlight = null;
                         email: email,
                         password: password,
                         options: {
+                            emailRedirectTo: new URL('/', window.location.href).href,
                             data: { full_name: name }
                         }
                     });
@@ -1217,18 +1218,26 @@ let citationPendingHighlight = null;
     // --------------------------------------------------------------------------
 
     function bindUploadEventHandlers() {
-        dropZone?.addEventListener('click', () => {
-            if (pdfFileInput) {
-                pdfFileInput.value = '';
-                pdfFileInput.click();
+        const openPdfFilePicker = () => {
+            if (!pdfFileInput || pdfUploadInProgress) return;
+            pdfFileInput.value = '';
+            if (typeof pdfFileInput.showPicker === 'function') {
+                try {
+                    pdfFileInput.showPicker();
+                    return;
+                } catch (error) {
+                    // Fall back for browsers that expose showPicker but block it.
+                }
             }
+            pdfFileInput.click();
+        };
+
+        dropZone?.addEventListener('click', () => {
+            openPdfFilePicker();
         });
 
         btnSettingsUpload?.addEventListener('click', () => {
-            if (pdfFileInput) {
-                pdfFileInput.value = '';
-                pdfFileInput.click();
-            }
+            openPdfFilePicker();
         });
 
         dropZone?.addEventListener('dragover', (e) => {
@@ -1938,7 +1947,7 @@ let citationPendingHighlight = null;
                 <path d="M12 2v20"></path>
                 <path d="M17 5H9.5a3.5 3.5 0 0 0 0 7H14.5a3.5 3.5 0 0 1 0 7H6"></path>
             </svg>
-            <span>Ask Gemini instead</span>
+            <span>Answer using Gemini general knowledge</span>
         `;
         fallbackBtn.addEventListener('click', async () => {
             if (isGenerating) return;
@@ -1961,7 +1970,7 @@ let citationPendingHighlight = null;
 
                 if (res.ok && data && data.answer) {
                     wrapper.remove();
-                    recordMessageInActiveConversation('assistant', data.answer, [], [], queryText, []);
+                    recordMessageInActiveConversation('assistant', data.answer, [], [], queryText, [], 'Gemini general knowledge');
                     appendGeneralKnowledgeMessage(data.answer, queryText);
                 } else {
                     const errMsg = (data && (data.detail || data.message)) || 'Gemini general-knowledge fallback failed.';
@@ -2029,7 +2038,7 @@ let citationPendingHighlight = null;
 
         const label = document.createElement('div');
         label.className = 'general-knowledge-label';
-        label.textContent = 'Gemini General Knowledge';
+        label.textContent = 'Gemini general knowledge';
         label.style.fontSize = '11px';
         label.style.fontWeight = '700';
         label.style.letterSpacing = '0.08em';
@@ -2414,15 +2423,8 @@ let citationPendingHighlight = null;
     });
 
     // Settings Modal Inputs
-    const settingTopK = document.getElementById('settingTopK');
-    const topKValueDisplay = document.getElementById('topKValueDisplay');
     const btnSaveMemorySetting = document.getElementById('btnSaveMemorySetting');
     const settingAnswerMemory = document.getElementById('settingAnswerMemory');
-
-    settingTopK?.addEventListener('input', (e) => {
-        if (topKValueDisplay) topKValueDisplay.textContent = e.target.value;
-        localStorage.setItem('cwp_top_k', e.target.value);
-    });
 
     btnSaveMemorySetting?.addEventListener('click', async () => {
         const memoryText = settingAnswerMemory ? settingAnswerMemory.value.trim() : '';
@@ -2432,17 +2434,13 @@ let citationPendingHighlight = null;
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ memory: memoryText })
             });
-            showGlobalAlert('Answer formatting rule saved successfully.', 'success');
+            showGlobalAlert('Answer preference saved successfully.', 'success');
         } catch (e) {
             showGlobalAlert('Failed to save memory rule.', 'error');
         }
     });
 
     function loadSettingsValues() {
-        const savedTopK = localStorage.getItem('cwp_top_k') || '6';
-        if (settingTopK) settingTopK.value = savedTopK;
-        if (topKValueDisplay) topKValueDisplay.textContent = savedTopK;
-
         fetch('/api/status')
             .then(res => res.json())
             .then(data => {
@@ -2558,7 +2556,7 @@ let citationPendingHighlight = null;
         return (citations || []).map(c => Object.assign({}, c, { docHash: hash }));
     }
 
-    function recordMessageInActiveConversation(sender, text, sources = [], chunks = [], question = null, citations = []) {
+    function recordMessageInActiveConversation(sender, text, sources = [], chunks = [], question = null, citations = [], sourceLabel = null) {
         let activeConv = conversations.find(c => c.id === activeConversationId);
         if (!activeConv) {
             createNewConversation();
@@ -2572,6 +2570,7 @@ let citationPendingHighlight = null;
             chunks,
             citations,
             question,
+            source_label: sourceLabel,
             timestamp: new Date().toISOString()
         });
         saveConversations();
@@ -2595,7 +2594,11 @@ let citationPendingHighlight = null;
             } else {
                 const prevUser = activeConv.messages.slice(0, idx).reverse().find(m => m.sender === 'user');
                 const q = msg.question || (prevUser ? prevUser.text : null);
-                appendAssistantMessage(msg.text, msg.sources, msg.chunks, q, idx, msg.citations);
+                if (msg.source_label === 'Gemini general knowledge') {
+                    appendGeneralKnowledgeMessage(msg.text, q);
+                } else {
+                    appendAssistantMessage(msg.text, msg.sources, msg.chunks, q, idx, msg.citations);
+                }
             }
         });
         scrollToChatBottom();

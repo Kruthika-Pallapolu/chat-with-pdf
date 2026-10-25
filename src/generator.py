@@ -275,6 +275,9 @@ USER QUESTION:
         except Exception as error:
             logger.warning("Gemini PDF generation failed for %s (%s).", model_name, type(error).__name__)
 
+            if model_name == FALLBACK_MODEL:
+                raise
+
             if model_name != FALLBACK_MODEL:
                 print(
                     f"Trying fallback model: {FALLBACK_MODEL}..."
@@ -342,6 +345,9 @@ USER QUESTION:
 
         except Exception as error:
             logger.warning("Gemini general generation failed for %s (%s).", model_name, type(error).__name__)
+
+            if model_name == FALLBACK_MODEL:
+                raise
 
             if model_name != FALLBACK_MODEL:
                 print(

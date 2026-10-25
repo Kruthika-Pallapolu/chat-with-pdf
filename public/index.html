@@ -24,7 +24,7 @@
     <link rel="stylesheet" href="/static/style.css?v=3">
 
     <!-- Favicon -->
-    <link rel="icon" type="image/svg+xml" href="/static/cwp-mark.svg">
+    <link rel="icon" type="image/svg+xml" href="/static/cwp-favicon.svg">
 </head>
 <body>
     <div id="appRoot" class="app-root">
@@ -76,7 +76,7 @@
                             <path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"></path>
                             <circle cx="12" cy="7" r="4"></circle>
                         </svg>
-                        Continue as Guest / Demo Mode
+                        Continue in Guest Mode
                     </button>
                     <div class="auth-footer">
                         <span>Don't have an account?</span>
@@ -286,7 +286,7 @@
                                 <line x1="12" y1="8" x2="12" y2="12"></line>
                                 <line x1="12" y1="16" x2="12.01" y2="16"></line>
                             </svg>
-                            <span>AI &amp; RAG Engine</span>
+                            <span>Answer Style</span>
                         </button>
                         <button type="button" class="tab-btn" data-tab="tabAppearance">
                             <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
@@ -344,35 +344,11 @@
 
                     <!-- Tab Content: AI & RAG Engine -->
                     <div id="tabAiRag" class="tab-content" style="display: none;">
-                        <h3 class="tab-heading">Gemini Model &amp; Retrieval</h3>
-                        <p class="tab-description">Configure the AI engine, RAG retrieval depth, and answer formatting instructions.</p>
+                        <h3 class="tab-heading">Answer Style</h3>
+                        <p class="tab-description">Set a preference for how answers are formatted.</p>
 
-                        <div class="form-group" style="margin-bottom: 16px;">
-                            <label for="settingAiModel" style="font-weight: 600; font-size: 0.85rem;">Gemini Model</label>
-                            <select id="settingAiModel" class="form-control" style="width: 100%; padding: 8px 12px; border-radius: var(--radius-md); border: 1px solid var(--border-color); background: var(--bg-surface); color: var(--text-main); font-size: 0.85rem;">
-                                <option value="gemini-3.8-flash">Gemini 3.8 Flash (Recommended — Fast &amp; Intelligent)</option>
-                                <option value="gemini-3.5-flash-lite">Gemini 3.5 Flash Lite (Ultra Fast)</option>
-                            </select>
-                        </div>
-
-                        <div class="form-group" style="margin-bottom: 16px;">
-                            <label for="settingAnswerMode" style="font-weight: 600; font-size: 0.85rem;">Q&amp;A Grounding Mode</label>
-                            <select id="settingAnswerMode" class="form-control" style="width: 100%; padding: 8px 12px; border-radius: var(--radius-md); border: 1px solid var(--border-color); background: var(--bg-surface); color: var(--text-main); font-size: 0.85rem;">
-                                <option value="hybrid">Hybrid AI &amp; PDF (Combines PDF facts with domain knowledge)</option>
-                                <option value="strict">Strict PDF Only (Only answer from direct PDF text)</option>
-                            </select>
-                        </div>
-
-                        <div class="form-group" style="margin-bottom: 16px;">
-                            <label for="settingTopK" style="font-weight: 600; font-size: 0.85rem;">RAG Retrieval Depth (Context Chunks: <span id="topKValueDisplay">6</span>)</label>
-                            <input type="range" id="settingTopK" min="3" max="12" step="1" value="6" style="width: 100%; accent-color: var(--accent);">
-                        </div>
-
-                        <hr class="divider">
-                        <h3 class="tab-heading">Personalized Answer Memory</h3>
-                        <p class="tab-description">Define custom answer formatting rules (e.g. "Use bullet points and bold key terms").</p>
                         <textarea id="settingAnswerMemory" rows="3" placeholder="e.g. Structure answers with short paragraphs and bullet points..." style="width: 100%; padding: 10px; border-radius: var(--radius-md); border: 1px solid var(--border-color); background: var(--bg-surface); color: var(--text-main); font-size: 0.85rem; font-family: inherit; resize: vertical;"></textarea>
-                        <button type="button" id="btnSaveMemorySetting" class="btn-primary btn-block" style="margin-top: 10px;">Save Memory Rule</button>
+                        <button type="button" id="btnSaveMemorySetting" class="btn-primary btn-block" style="margin-top: 10px;">Save Preference</button>
                     </div>
 
                     <!-- Tab Content: Appearance -->

@@ -105,10 +105,24 @@ class ApiSecurityTests(unittest.TestCase):
             third.close()
 
     def test_static_allowlist_hides_backup_and_test_files(self):
+        index = self.client.get("/")
+        self.assertEqual(index.status_code, 200)
+        self.assertIn('href="/static/cwp-favicon.svg"', index.text)
         self.assertEqual(self.client.get("/static/app.js").status_code, 200)
+        self.assertEqual(self.client.get("/static/cwp-favicon.svg").status_code, 200)
         self.assertEqual(self.client.get("/static/app.js.backup").status_code, 404)
         self.assertEqual(self.client.get("/static/test.pdf").status_code, 404)
         self.assertEqual(self.client.get("/static/../.env").status_code, 404)
+
+    def test_guest_wording_and_simplified_settings_are_rendered(self):
+        response = self.client.get("/")
+        self.assertIn("Continue in Guest Mode", response.text)
+        self.assertNotIn("Demo Mode", response.text)
+        self.assertIn("Answer Style", response.text)
+        self.assertNotIn('id="settingAiModel"', response.text)
+        self.assertNotIn('id="settingAnswerMode"', response.text)
+        self.assertNotIn('id="settingTopK"', response.text)
+        self.assertIn('name="themeSelect"', response.text)
 
     def test_model_exception_does_not_reveal_internal_details(self):
         self.client.get("/api/status")
@@ -136,10 +150,18 @@ class ApiSecurityTests(unittest.TestCase):
             response = self.client.post("/api/chat/fallback", json={"question": "A general question?"})
 
         self.assertEqual(response.status_code, 200)
-        self.assertEqual(response.json()["source_label"], "Gemini General Knowledge")
+        self.assertEqual(response.json()["source_label"], "Gemini general knowledge")
         self.assertFalse(response.json()["found_in_pdf"])
         self.assertNotIn("sources", response.json())
         self.assertNotIn("citations", response.json())
+
+    def test_general_fallback_reports_rate_limit_without_leaking_provider_details(self):
+        with mock.patch.object(server, "generate_general_answer", side_effect=RuntimeError("429 quota at /secret")):
+            response = self.client.post("/api/chat/fallback", json={"question": "A general question?"})
+
+        self.assertEqual(response.status_code, 429)
+        self.assertIn("rate limit or quota", response.json()["detail"].lower())
+        self.assertNotIn("/secret", response.text)
 
     def test_insufficient_pdf_answer_does_not_call_general_generator_implicitly(self):
         self.client.get("/api/status")

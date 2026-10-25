@@ -107,7 +107,4 @@ def search(query, chunks, embeddings, model, top_k=5, threshold=0.25):
         c for c in scored_chunks
         if c["score"] >= max(threshold, top_score * 0.72)
     ]
-    if not filtered:
-        filtered = scored_chunks[:min(2, len(scored_chunks))]
-
     return filtered[:top_k]

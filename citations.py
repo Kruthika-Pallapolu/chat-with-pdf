@@ -169,7 +169,7 @@ def find_evidence(answer, chunk_text):
 
 def build_citations(answer, results, cited_indexes, page_texts=None):
     """
-    One entry per model-cited chunk (validated ids only).
+    One entry per supplied chunk selected by the answer support check.
 
     evidence is None unless the support test passed -> frontend: page only.
     position_hint (0..1, approximate) is only used by the frontend to choose
@@ -198,3 +198,41 @@ def build_citations(answer, results, cited_indexes, page_texts=None):
             "position_hint": hint,
         })
     return out
+
+
+def filter_supported_answer(answer, results):
+    """Keep answer sentences with lexical support in at least one supplied chunk.
+
+    Returns the supported text, supporting chunk indexes, and whether any text
+    was omitted. This deliberately reuses the same conservative evidence check
+    used for citation highlighting.
+    """
+    if not answer:
+        return "", [], False
+
+    units = re.split(r"(?<=[.!?])\s+|\n(?=\s*(?:[-*•]|\d+[.)]))", answer.strip())
+    supported, indexes = [], set()
+    omitted = False
+    for unit in units:
+        unit = unit.strip()
+        if not unit:
+            continue
+        plain_unit = re.sub(r"^(?:[-*•]|\d+[.)])\s*", "", unit).strip()
+        answer_tokens = set(_content_tokens(plain_unit))
+        matched_indexes = []
+        for index, result in enumerate(results):
+            source_text = result.get("text", "")
+            source_tokens = set(_content_tokens(source_text))
+            if (
+                answer_tokens
+                and len(answer_tokens & source_tokens) / len(answer_tokens) >= MIN_CONTAINMENT
+                and find_evidence(plain_unit, source_text)
+            ):
+                matched_indexes.append(index)
+        if matched_indexes:
+            supported.append(unit)
+            indexes.update(matched_indexes)
+        else:
+            omitted = True
+
+    return "\n".join(supported), sorted(indexes), omitted
