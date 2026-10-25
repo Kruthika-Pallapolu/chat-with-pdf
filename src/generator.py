@@ -6,7 +6,7 @@ from datetime import datetime, timezone
 from google import genai
 from google.genai import types
 from google.genai.errors import ServerError
-from sentence_transformers import SentenceTransformer
+from embedder import model
 
 from search import search
 from pdf_loader import extract_text
@@ -22,7 +22,6 @@ GEMINI_TIMEOUT_MS = int(os.getenv("GEMINI_TIMEOUT_MS", "30000"))
 
 
 # Load the embedding model once
-model = SentenceTransformer("all-MiniLM-L6-v2")
 logger = logging.getLogger("cwp.generator")
 
 
