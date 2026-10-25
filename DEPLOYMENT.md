@@ -4,7 +4,7 @@
 
 CWP currently supports an **anonymous-session demo**, not a public authenticated service. The browser may display an optional Supabase sign-in flow, but the FastAPI routes authorize requests with a server-issued anonymous session cookie; they do not validate a Supabase user identity. Do not rely on client-side gating to protect a public deployment. Add and verify server-side identity checks before opening the service to the public or storing sensitive documents.
 
-Each session's PDF, index, answer memory, conversation history, rate limits, and session records live under `CWP_DATA_DIR`. Attach a persistent writable volume at that path. Losing or rolling back that volume loses session state and invalidates sessions. Keep it private and back it up according to the data-retention policy you choose. Expired sessions are cleaned up on requests; this is not a substitute for monitoring and volume capacity management.
+Each session's PDF, index, answer memory, conversation history, rate limits, and session records live under `CWP_DATA_DIR`. Attach a persistent writable volume at that path. Read-only shared conversation snapshots use the same SQLite database, remain available across application restarts, and are lost if that volume is lost or rolled back. Shared links are immutable and currently have no revocation or automatic expiry. Keep the volume private and back it up according to the data-retention policy you choose. Expired sessions are cleaned up on requests; this is not a substitute for monitoring and volume capacity management.
 
 ## Build and start
 

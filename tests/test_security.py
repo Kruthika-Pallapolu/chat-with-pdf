@@ -110,9 +110,86 @@ class ApiSecurityTests(unittest.TestCase):
         self.assertIn('href="/static/cwp-favicon.svg?v=2"', index.text)
         self.assertEqual(self.client.get("/static/app.js").status_code, 200)
         self.assertEqual(self.client.get("/static/cwp-favicon.svg").status_code, 200)
+        self.assertEqual(self.client.get("/static/share.js").status_code, 200)
+        self.assertEqual(self.client.get("/static/share.css").status_code, 200)
+        self.assertEqual(self.client.get("/static/share.html").status_code, 404)
         self.assertEqual(self.client.get("/static/app.js.backup").status_code, 404)
         self.assertEqual(self.client.get("/static/test.pdf").status_code, 404)
         self.assertEqual(self.client.get("/static/../.env").status_code, 404)
+
+    def test_shared_conversation_is_durable_read_only_and_isolated_from_fresh_session(self):
+        self.client.get("/api/status")
+        conversations = [
+            {
+                "id": "conv_123456",
+                "title": "Shared notes",
+                "messages": [
+                    {"sender": "user", "text": "Question with code?", "session_id": "must-not-share"},
+                    {"sender": "assistant", "text": "Here is the full answer:\n```python\nprint(42)\n```", "internal_prompt": "must-not-share", "sources": [{"page": 4}]},
+                ],
+            },
+            {
+                "id": "conv_654321",
+                "title": "Private conversation",
+                "messages": [{"sender": "assistant", "text": "private other conversation content"}],
+            },
+        ]
+        saved = self.client.put("/api/conversations", json={"conversations": conversations, "document_hash": None})
+        self.assertEqual(saved.status_code, 200)
+
+        created = self.client.post("/api/conversations/conv_123456/share")
+        self.assertEqual(created.status_code, 200)
+        share_path = created.json()["share_path"]
+        share_id = share_path.rsplit("/", 1)[-1]
+        self.assertRegex(share_id, r"^[A-Za-z0-9_-]{43}$")
+        self.assertEqual(self.client.post("/api/conversations/conv_654321/share").status_code, 200)
+
+        # Reopen the SQLite-backed store as a process restart would, and read from a fresh session.
+        server._session_store_instance = None
+        server._session_store_path = None
+        fresh = TestClient(server.app, base_url="https://testserver", headers={"Origin": "https://testserver"})
+        try:
+            landing = fresh.get("/")
+            self.assertEqual(landing.status_code, 200)
+            self.assertTrue(fresh.cookies.get("cwp_session"))
+            page = fresh.get(share_path)
+            self.assertEqual(page.status_code, 200)
+            self.assertIn("/static/share.js", page.text)
+            data = fresh.get(f"/shared/{share_id}")
+            self.assertEqual(data.status_code, 200)
+            self.assertEqual(data.json(), {
+                "title": "Shared notes",
+                "messages": [
+                    {"sender": "user", "text": "Question with code?"},
+                    {"sender": "assistant", "text": "Here is the full answer:\n```python\nprint(42)\n```"},
+                ],
+            })
+            self.assertNotIn("private other conversation content", data.text)
+            self.assertNotIn("must-not-share", data.text)
+            self.assertNotIn("session_id", data.text)
+            self.assertEqual(fresh.get("/shared/not-a-valid-id").status_code, 404)
+            self.assertEqual(fresh.get("/share/not-a-valid-id").status_code, 404)
+        finally:
+            fresh.close()
+
+    def test_conversation_share_rejects_unknown_conversation(self):
+        self.client.get("/api/status")
+        response = self.client.post("/api/conversations/conv_123/share")
+        self.assertEqual(response.status_code, 404)
+
+    def test_conversation_share_rejects_unapproved_message_fields(self):
+        self.client.get("/api/status")
+        saved = self.client.put("/api/conversations", json={
+            "conversations": [{
+                "id": "conv_123",
+                "title": "Invalid transcript",
+                "messages": [{"sender": "system", "text": "internal prompt"}],
+            }],
+            "document_hash": None,
+        })
+        self.assertEqual(saved.status_code, 200)
+        response = self.client.post("/api/conversations/conv_123/share")
+        self.assertEqual(response.status_code, 400)
 
     def test_mobile_workspace_uses_stacked_panels_and_keyboard_drawer(self):
         index = self.client.get("/").text

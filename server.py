@@ -7,6 +7,7 @@ import threading
 import json
 import secrets
 import time
+import re
 from pathlib import Path
 from typing import List, Optional
 from dotenv import load_dotenv, find_dotenv
@@ -96,6 +97,7 @@ MAX_PDF_TEXT_CHARS = int(os.getenv("MAX_PDF_TEXT_CHARS", str(2_000_000)))
 MAX_IMAGE_BYTES = int(os.getenv("MAX_IMAGE_BYTES", str(5 * 1024 * 1024)))
 MAX_QUESTION_CHARS = int(os.getenv("MAX_QUESTION_CHARS", "4000"))
 MAX_CONVERSATIONS_BYTES = int(os.getenv("MAX_CONVERSATIONS_BYTES", str(2 * 1024 * 1024)))
+SHARE_ID_PATTERN = re.compile(r"^[A-Za-z0-9_-]{43}$")
 MODEL_WORK_SEMAPHORE = threading.BoundedSemaphore(max(1, int(os.getenv("MAX_CONCURRENT_MODEL_REQUESTS", "1"))))
 PDF_PROCESS_SEMAPHORE = threading.BoundedSemaphore(max(1, int(os.getenv("MAX_CONCURRENT_PDF_PROCESSES", "1"))))
 DOCUMENT_LOAD_SEMAPHORE = threading.BoundedSemaphore(max(1, int(os.getenv("MAX_CONCURRENT_DOCUMENT_LOADS", "1"))))
@@ -608,6 +610,64 @@ def get_conversations(request: Request):
         _, conversations = get_session_store().get_preferences(session_id)
         document_hash = _get_active_document_hash(session_id)
     return {"conversations": conversations, "document_hash": document_hash}
+
+
+@app.post("/api/conversations/{conversation_id}/share")
+def create_conversation_share(conversation_id: str, request: Request):
+    session_id = _request_session(request).session_id
+    _request_allowed(request, session_id, "conversation-share", 10, 3600)
+    if not re.fullmatch(r"conv_[0-9]{1,20}", conversation_id):
+        raise HTTPException(status_code=404, detail="Conversation not found.")
+    store = get_session_store()
+    with store.lock_for(session_id):
+        _, conversations = store.get_preferences(session_id)
+        conversation = next((item for item in conversations if isinstance(item, dict) and item.get("id") == conversation_id), None)
+        if conversation is None:
+            raise HTTPException(status_code=404, detail="Conversation not found.")
+        title = conversation.get("title")
+        messages = conversation.get("messages")
+        if not isinstance(title, str) or len(title) > 200 or not isinstance(messages, list) or len(messages) > 2000:
+            raise HTTPException(status_code=400, detail="Conversation cannot be shared.")
+        safe_messages = []
+        for message in messages:
+            if not isinstance(message, dict) or message.get("sender") not in {"user", "assistant"} or not isinstance(message.get("text"), str):
+                raise HTTPException(status_code=400, detail="Conversation cannot be shared.")
+            safe_messages.append({"sender": message["sender"], "text": message["text"]})
+        serialized = json.dumps(
+            {"title": title, "messages": safe_messages}, ensure_ascii=False, separators=(",", ":")
+        )
+        if len(serialized.encode("utf-8")) > MAX_CONVERSATIONS_BYTES:
+            raise HTTPException(status_code=413, detail="Conversation is too large to share.")
+        share_id = secrets.token_urlsafe(32)
+        try:
+            store.create_shared_conversation(share_id, serialized, MAX_CONVERSATIONS_BYTES, 1000)
+        except SessionStorageLimitError as error:
+            raise HTTPException(status_code=507, detail=str(error)) from None
+    return {"share_path": f"/share/{share_id}"}
+
+
+@app.get("/share/{share_id}")
+def shared_conversation_page(share_id: str):
+    if not SHARE_ID_PATTERN.fullmatch(share_id) or get_session_store().get_shared_conversation(share_id) is None:
+        raise HTTPException(status_code=404, detail="Shared conversation not found.")
+    return FileResponse(
+        os.path.join(FRONTEND_DIR, "share.html"),
+        headers={"Cache-Control": "no-store", "X-Content-Type-Options": "nosniff"},
+    )
+
+
+@app.get("/shared/{share_id}")
+def get_shared_conversation(share_id: str, request: Request):
+    if not SHARE_ID_PATTERN.fullmatch(share_id):
+        raise HTTPException(status_code=404, detail="Shared conversation not found.")
+    store = get_session_store()
+    host = request.client.host if request.client else "unknown"
+    if not store.allow_ip_request(host, "shared-conversation-read", 120):
+        raise HTTPException(status_code=429, detail="Request limit reached. Please wait and try again.")
+    snapshot = store.get_shared_conversation(share_id)
+    if snapshot is None:
+        raise HTTPException(status_code=404, detail="Shared conversation not found.")
+    return JSONResponse(snapshot, headers={"Cache-Control": "no-store", "X-Content-Type-Options": "nosniff"})
 
 
 @app.put("/api/conversations")
@@ -1177,7 +1237,7 @@ def chat_fallback(req: QuestionRequest, request: Request):
 
 FRONTEND_DIR = os.path.join(PROJECT_ROOT, "public")
 os.makedirs(FRONTEND_DIR, exist_ok=True)
-STATIC_ASSETS = {"style.css", "cwp-mark.svg", "cwp-favicon.svg", "app.js", "highlight.js", "markdown.js"}
+STATIC_ASSETS = {"style.css", "share.css", "share.js", "cwp-mark.svg", "cwp-favicon.svg", "app.js", "highlight.js", "markdown.js"}
 
 
 @app.get("/static/{asset_path:path}")

@@ -1918,6 +1918,7 @@ let citationPendingHighlight = null;
         const copyBtn = document.createElement('button');
         copyBtn.type = 'button';
         copyBtn.className = 'btn-msg-action btn-copy-response';
+        copyBtn.dataset.copyText = answerText;
         copyBtn.setAttribute('aria-label', 'Copy response');
         copyBtn.innerHTML = `
             <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
@@ -1929,7 +1930,7 @@ let citationPendingHighlight = null;
         copyBtn.addEventListener('click', async (e) => {
             e.stopPropagation();
             try {
-                await navigator.clipboard.writeText(answerText);
+                await navigator.clipboard.writeText(copyBtn.dataset.copyText || answerText);
                 copyBtn.classList.add('copied');
                 copyBtn.innerHTML = `
                     <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
@@ -2044,10 +2045,13 @@ let citationPendingHighlight = null;
                     }
                     bubble.className = 'message-bubble error';
                     bubble.innerHTML = `<p style="color: var(--danger);">${escapeHtml(errMsg)}</p>`;
+                    copyBtn.dataset.copyText = errMsg;
                 }
             } catch (err) {
                 bubble.className = 'message-bubble error';
-                bubble.innerHTML = `<p style="color: var(--danger);">Network error while regenerating: ${escapeHtml(err.message)}</p>`;
+                const errMsg = `Network error while regenerating: ${err.message}`;
+                bubble.innerHTML = `<p style="color: var(--danger);">${escapeHtml(errMsg)}</p>`;
+                copyBtn.dataset.copyText = errMsg;
             } finally {
                 setGeneratingState(false);
             }
@@ -2117,6 +2121,7 @@ let citationPendingHighlight = null;
                 } else {
                     const errMsg = (data && (data.detail || data.message)) || 'Gemini general-knowledge fallback failed.';
                     bubble.innerHTML = `<p style="color: var(--danger);">${escapeHtml(errMsg)}</p>`;
+                    wrapper.querySelector('.btn-copy-response').dataset.copyText = errMsg;
                     actions.innerHTML = '';
                     const retryBtn = document.createElement('button');
                     retryBtn.type = 'button';
@@ -2130,7 +2135,9 @@ let citationPendingHighlight = null;
                     bubble.appendChild(actions);
                 }
             } catch (err) {
-                bubble.innerHTML = `<p style="color: var(--danger);">${escapeHtml(err.message || 'General knowledge fallback failed.')}</p>`;
+                const errMsg = err.message || 'General knowledge fallback failed.';
+                bubble.innerHTML = `<p style="color: var(--danger);">${escapeHtml(errMsg)}</p>`;
+                wrapper.querySelector('.btn-copy-response').dataset.copyText = errMsg;
                 actions.innerHTML = '';
                 const retryBtn = document.createElement('button');
                 retryBtn.type = 'button';
@@ -2167,8 +2174,45 @@ let citationPendingHighlight = null;
         bubble.appendChild(actions);
 
         wrapper.appendChild(bubble);
+        appendAssistantCopyControl(wrapper, messageText);
         chatMessages.appendChild(wrapper);
         scrollToChatBottom();
+    }
+
+    function appendAssistantCopyControl(wrapper, responseText) {
+        const toolbar = document.createElement('div');
+        toolbar.className = 'msg-toolbar';
+        const button = document.createElement('button');
+        button.type = 'button';
+        button.className = 'btn-msg-action btn-copy-response';
+        button.dataset.copyText = String(responseText || '');
+        button.setAttribute('aria-label', 'Copy response');
+        button.innerHTML = `
+            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
+                <rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect>
+                <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path>
+            </svg><span class="btn-popout-label">Copy</span>`;
+        button.addEventListener('click', async (event) => {
+            event.stopPropagation();
+            try {
+                await navigator.clipboard.writeText(button.dataset.copyText || '');
+                button.classList.add('copied');
+                button.querySelector('.btn-popout-label').textContent = 'Copied!';
+                showGlobalAlert('Response copied to clipboard.', 'success');
+                setTimeout(() => {
+                    button.classList.remove('copied');
+                    button.querySelector('.btn-popout-label').textContent = 'Copy';
+                }, 2000);
+            } catch {
+                button.querySelector('.btn-popout-label').textContent = 'Copy failed';
+                showGlobalAlert('Unable to copy response to clipboard.', 'warning');
+                setTimeout(() => {
+                    button.querySelector('.btn-popout-label').textContent = 'Copy';
+                }, 2500);
+            }
+        });
+        toolbar.appendChild(button);
+        wrapper.appendChild(toolbar);
     }
 
     function appendGeneralKnowledgeMessage(answerText, correspondingQuestion = null) {
@@ -2195,6 +2239,7 @@ let citationPendingHighlight = null;
         bubble.appendChild(textContainer);
 
         wrapper.appendChild(bubble);
+        appendAssistantCopyControl(wrapper, answerText);
         chatMessages.appendChild(wrapper);
         scrollToChatBottom();
     }
@@ -2229,6 +2274,7 @@ let citationPendingHighlight = null;
         }
 
         wrapper.appendChild(bubble);
+        appendAssistantCopyControl(wrapper, messageText || 'The PDF context does not contain enough information to answer this question.');
         chatMessages.appendChild(wrapper);
         scrollToChatBottom();
     }
@@ -2263,6 +2309,7 @@ let citationPendingHighlight = null;
         }
 
         wrapper.appendChild(bubble);
+        appendAssistantCopyControl(wrapper, errorText);
         chatMessages.appendChild(wrapper);
         scrollToChatBottom();
     }
@@ -3013,56 +3060,50 @@ let citationPendingHighlight = null;
     }
 
     async function shareConversation(conv) {
-        let text = `# ${conv.title}\n\n`;
-        if (conv.messages && conv.messages.length) {
-            conv.messages.forEach(msg => {
-                text += `### ${msg.sender === 'user' ? 'User' : 'Assistant'}\n${msg.text}\n\n`;
-            });
-        } else {
-            text += `No messages in conversation.\n`;
-        }
-
-        if (navigator.share) {
-            try {
-                await navigator.share({
-                    title: conv.title,
-                    text: text,
-                    url: window.location.href
-                });
-                showGlobalAlert(`Conversation "${conv.title}" shared successfully.`, 'success');
-                return;
-            } catch (err) {
-                if (err.name === 'AbortError') return;
-            }
-        }
-
         try {
-            await navigator.clipboard.writeText(text);
-            showGlobalAlert(`Conversation "${conv.title}" transcript copied to clipboard for sharing.`, 'success');
-        } catch {
-            showGlobalAlert('Unable to copy conversation to clipboard.', 'warning');
+            await conversationSaveQueue.catch(() => {});
+            const response = await fetch(`/api/conversations/${encodeURIComponent(conv.id)}/share`, { method: 'POST' });
+            const data = await response.json().catch(() => ({}));
+            if (!response.ok || typeof data.share_path !== 'string' || !/^\/share\/[A-Za-z0-9_-]{43}$/.test(data.share_path)) {
+                throw new Error(data.detail || 'Could not create a conversation share link.');
+            }
+            const shareUrl = new URL(data.share_path, window.location.origin).href;
+            if (navigator.share) {
+                try {
+                    await navigator.share({ title: conv.title, url: shareUrl });
+                    showGlobalAlert('Conversation link shared.', 'success');
+                    return;
+                } catch (error) {
+                    if (error.name === 'AbortError') return;
+                }
+            }
+            await navigator.clipboard.writeText(shareUrl);
+            showGlobalAlert('Read-only conversation link copied to clipboard.', 'success');
+        } catch (error) {
+            showGlobalAlert(error.message || 'Unable to create or copy the conversation link.', 'warning');
         }
     }
 
     function exportConversation(conv) {
-        let text = `# ${conv.title}\n\n`;
-        if (conv.messages && conv.messages.length) {
-            conv.messages.forEach(msg => {
-                text += `### ${msg.sender === 'user' ? 'User' : 'Assistant'}\n${msg.text}\n\n`;
-            });
-        } else {
-            text += `No messages in conversation.\n`;
-        }
-
-        const blob = new Blob([text], { type: 'text/markdown' });
+        const text = formatConversationText(conv);
+        const blob = new Blob([text], { type: 'text/plain;charset=utf-8' });
         const url = URL.createObjectURL(blob);
         const a = document.createElement('a');
         a.href = url;
-        a.download = `${conv.title.replace(/[^a-z0-9]/gi, '_').toLowerCase()}_export.md`;
+        a.download = `${String(conv.title || 'conversation').replace(/[^a-z0-9]/gi, '_').toLowerCase()}_export.txt`;
         document.body.appendChild(a);
         a.click();
         document.body.removeChild(a);
         URL.revokeObjectURL(url);
+    }
+
+    function formatConversationText(conv) {
+        const lines = [String(conv.title || 'Conversation'), ''];
+        (Array.isArray(conv.messages) ? conv.messages : []).forEach(msg => {
+            if (!msg || !['user', 'assistant'].includes(msg.sender)) return;
+            lines.push(msg.sender === 'user' ? 'You:' : 'Assistant:', String(msg.text || ''), '');
+        });
+        return lines.join('\n');
     }
 
     function saveConversations() {

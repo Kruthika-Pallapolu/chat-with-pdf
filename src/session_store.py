@@ -111,6 +111,14 @@ class SessionStore:
                 )"""
             )
             connection.execute(
+                """CREATE TABLE IF NOT EXISTS shared_conversations (
+                    share_id TEXT PRIMARY KEY,
+                    snapshot_json TEXT NOT NULL,
+                    snapshot_bytes INTEGER NOT NULL,
+                    created_at REAL NOT NULL
+                )"""
+            )
+            connection.execute(
                 "INSERT OR IGNORE INTO session_storage (session_id) SELECT session_id FROM sessions"
             )
             sessions = connection.execute(
@@ -365,6 +373,36 @@ class SessionStore:
             self._last_cleanup = now
         finally:
             self._cleanup_guard.release()
+
+    def create_shared_conversation(self, share_id, snapshot_json, max_bytes, max_shares):
+        snapshot_bytes = len(snapshot_json.encode("utf-8"))
+        if snapshot_bytes > max_bytes:
+            raise SessionStorageLimitError("Conversation is too large to share.")
+        with self._connect() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            row = connection.execute(
+                "SELECT COUNT(*), COALESCE(SUM(snapshot_bytes), 0) FROM shared_conversations"
+            ).fetchone()
+            if row[0] >= max_shares or row[1] + snapshot_bytes > self.max_total_bytes:
+                raise SessionStorageLimitError("Shared conversation storage limit reached.")
+            connection.execute(
+                "INSERT INTO shared_conversations (share_id, snapshot_json, snapshot_bytes, created_at) "
+                "VALUES (?, ?, ?, ?)",
+                (share_id, snapshot_json, snapshot_bytes, time.time()),
+            )
+
+    def get_shared_conversation(self, share_id):
+        with self._connect() as connection:
+            row = connection.execute(
+                "SELECT snapshot_json FROM shared_conversations WHERE share_id = ?", (share_id,)
+            ).fetchone()
+        if row is None:
+            return None
+        try:
+            snapshot = json.loads(row[0])
+        except (TypeError, json.JSONDecodeError):
+            return None
+        return snapshot if isinstance(snapshot, dict) else None
 
     def _remove_session_files(self, session_id):
         try:
