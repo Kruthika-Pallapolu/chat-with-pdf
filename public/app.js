@@ -89,6 +89,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
     // Sidebar & Navigation
     const sidebarPanel = document.getElementById('sidebarPanel');
+    const sidebarBackdrop = document.getElementById('sidebarBackdrop');
     const btnNewChat = document.getElementById('btnNewChat');
     const chatHistoryList = document.getElementById('chatHistoryList');
     const btnSidebarSettings = document.getElementById('btnSidebarSettings');
@@ -191,6 +192,8 @@ let citationPendingHighlight = null;
     let conversationSaveQueue = Promise.resolve();
     let conversationStateReady = Promise.resolve();
     let conversationDocumentHash = null;
+    let activeHistoryPopoverCleanup = null;
+    let activeHistoryPopoverTrigger = null;
 
     // --------------------------------------------------------------------------
     // 3. Initialization Pipeline
@@ -205,6 +208,7 @@ let citationPendingHighlight = null;
     bindViewModeControls();
     bindPdfViewerControls();
     bindUploadEventHandlers();
+    bindMobileNavigation();
 
     // --------------------------------------------------------------------------
     // 4. Theme & Highlight Color Engines
@@ -973,11 +977,69 @@ let citationPendingHighlight = null;
             }
         });
 
+    }
+
+    function bindMobileNavigation() {
         btnToggleSidebarMobile?.addEventListener('click', () => {
-            if (sidebarPanel) {
-                sidebarPanel.classList.toggle('open');
+            setMobileSidebarOpen(!sidebarPanel?.classList.contains('open'));
+        });
+
+        sidebarBackdrop?.addEventListener('click', () => setMobileSidebarOpen(false));
+        document.addEventListener('keydown', (event) => {
+            if (event.key === 'Escape' && activeHistoryPopoverCleanup) {
+                const trigger = activeHistoryPopoverTrigger;
+                activeHistoryPopoverCleanup();
+                trigger?.focus({ preventScroll: true });
+                return;
+            }
+            if (event.key === 'Escape' && sidebarPanel?.classList.contains('open')) {
+                setMobileSidebarOpen(false);
+                return;
+            }
+            const popover = document.querySelector('.history-touch-popover');
+            if (event.key === 'Tab' && (popover || sidebarPanel?.classList.contains('open'))) {
+                const focusScope = popover || sidebarPanel;
+                const focusable = [...focusScope.querySelectorAll(
+                    'a[href], button:not(:disabled):not([tabindex="-1"]), input:not(:disabled):not([tabindex="-1"]), [tabindex]:not([tabindex="-1"])'
+                )].filter(element => element.getClientRects().length > 0);
+                if (!focusable.length) {
+                    event.preventDefault();
+                    return;
+                }
+                const first = focusable[0];
+                const last = focusable[focusable.length - 1];
+                if (event.shiftKey && (document.activeElement === first || !focusScope.contains(document.activeElement))) {
+                    event.preventDefault();
+                    last.focus();
+                } else if (!event.shiftKey && (document.activeElement === last || !focusScope.contains(document.activeElement))) {
+                    event.preventDefault();
+                    first.focus();
+                }
             }
         });
+        window.addEventListener('resize', () => {
+            if (window.innerWidth > 768 && sidebarPanel?.classList.contains('open')) {
+                setMobileSidebarOpen(false, false);
+            }
+        });
+        setMobileSidebarOpen(false, false);
+    }
+
+    function setMobileSidebarOpen(open, restoreFocus = true) {
+        if (!sidebarPanel || !btnToggleSidebarMobile) return;
+        const isOpen = Boolean(open) && window.innerWidth <= 768;
+        if (!isOpen) activeHistoryPopoverCleanup?.();
+        sidebarPanel.classList.toggle('open', isOpen);
+        sidebarBackdrop?.classList.toggle('active', isOpen);
+        sidebarPanel.setAttribute('aria-hidden', String(!isOpen && window.innerWidth <= 768));
+        sidebarPanel.inert = !isOpen && window.innerWidth <= 768;
+        btnToggleSidebarMobile.setAttribute('aria-expanded', String(isOpen));
+        btnToggleSidebarMobile.setAttribute('aria-label', isOpen ? 'Close navigation drawer' : 'Open navigation drawer');
+        if (isOpen) {
+            sidebarPanel.querySelector('#btnNewChat')?.focus({ preventScroll: true });
+        } else if (restoreFocus) {
+            btnToggleSidebarMobile.focus({ preventScroll: true });
+        }
     }
 
     function showAuthForm(formType) {
@@ -1236,6 +1298,13 @@ let citationPendingHighlight = null;
             openPdfFilePicker();
         });
 
+        dropZone?.addEventListener('keydown', (event) => {
+            if (event.key === 'Enter' || event.key === ' ') {
+                event.preventDefault();
+                openPdfFilePicker();
+            }
+        });
+
         btnSettingsUpload?.addEventListener('click', () => {
             openPdfFilePicker();
         });
@@ -1264,7 +1333,10 @@ let citationPendingHighlight = null;
             }
         });
 
-        btnRemovePdf?.addEventListener('click', () => showRemoveConfirmModal());
+        btnRemovePdf?.addEventListener('click', () => {
+            setMobileSidebarOpen(false, false);
+            showRemoveConfirmModal();
+        });
         btnSettingsRemove?.addEventListener('click', () => showRemoveConfirmModal());
 
         btnCancelRemoveDoc?.addEventListener('click', () => {
@@ -1340,6 +1412,7 @@ let citationPendingHighlight = null;
     function showRemoveConfirmModal() {
         if (confirmDocName) confirmDocName.textContent = currentDocument ? currentDocument.filename : 'active PDF';
         if (confirmRemoveModal) confirmRemoveModal.style.display = 'flex';
+        btnCancelRemoveDoc?.focus({ preventScroll: true });
     }
 
     // --------------------------------------------------------------------------
@@ -2401,9 +2474,11 @@ let citationPendingHighlight = null;
     });
 
     function showSettingsModal() {
+        setMobileSidebarOpen(false, false);
         if (settingsModal) settingsModal.style.display = 'flex';
         updateSettingsDocUI();
         loadSettingsValues();
+        btnCloseSettings?.focus({ preventScroll: true });
     }
 
     btnCloseSettings?.addEventListener('click', () => {
@@ -2508,7 +2583,10 @@ let citationPendingHighlight = null;
             loadActiveConversationMessages();
         }
 
-        btnNewChat?.addEventListener('click', () => createNewConversation());
+        btnNewChat?.addEventListener('click', () => {
+            createNewConversation();
+            setMobileSidebarOpen(false);
+        });
     }
 
     function createNewConversation() {
@@ -2620,6 +2698,10 @@ let citationPendingHighlight = null;
             const isSelected = conv.id === activeConversationId;
             const item = document.createElement('div');
             item.className = `history-item ${isSelected ? 'active' : ''} ${conv.pinned ? 'pinned' : ''}`;
+            item.setAttribute('role', 'group');
+            item.setAttribute('aria-label', `Conversation: ${conv.title}`);
+            item.setAttribute('aria-current', String(isSelected));
+            item.tabIndex = 0;
 
             const leftContainer = document.createElement('div');
             leftContainer.className = 'history-item-left';
@@ -2643,6 +2725,7 @@ let citationPendingHighlight = null;
             pinBtn.type = 'button';
             pinBtn.className = 'btn-history-action btn-pin';
             pinBtn.title = conv.pinned ? 'Unpin conversation' : 'Pin conversation';
+            pinBtn.setAttribute('aria-label', pinBtn.title);
             pinBtn.innerHTML = `
                 <svg width="12" height="12" viewBox="0 0 24 24" fill="${conv.pinned ? 'currentColor' : 'none'}" stroke="currentColor" stroke-width="2">
                     <line x1="12" y1="17" x2="12" y2="22"></line>
@@ -2662,6 +2745,7 @@ let citationPendingHighlight = null;
             shareBtn.type = 'button';
             shareBtn.className = 'btn-history-action btn-share';
             shareBtn.title = 'Share conversation';
+            shareBtn.setAttribute('aria-label', shareBtn.title);
             shareBtn.innerHTML = `
                 <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                     <circle cx="18" cy="5" r="3"></circle>
@@ -2681,6 +2765,7 @@ let citationPendingHighlight = null;
             downloadBtn.type = 'button';
             downloadBtn.className = 'btn-history-action btn-download';
             downloadBtn.title = 'Download conversation';
+            downloadBtn.setAttribute('aria-label', downloadBtn.title);
             downloadBtn.innerHTML = `
                 <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                     <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path>
@@ -2698,6 +2783,7 @@ let citationPendingHighlight = null;
             deleteBtn.type = 'button';
             deleteBtn.className = 'btn-history-action btn-delete danger';
             deleteBtn.title = 'Delete conversation';
+            deleteBtn.setAttribute('aria-label', deleteBtn.title);
             deleteBtn.innerHTML = `
                 <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                     <polyline points="3 6 5 6 21 6"></polyline>
@@ -2731,6 +2817,7 @@ let citationPendingHighlight = null;
             touchBtn.type = 'button';
             touchBtn.className = 'history-touch-trigger';
             touchBtn.title = 'Conversation options';
+            touchBtn.setAttribute('aria-label', `Conversation options for ${conv.title}`);
             touchBtn.innerHTML = `
                 <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                     <circle cx="12" cy="12" r="1.5"></circle>
@@ -2740,7 +2827,7 @@ let citationPendingHighlight = null;
             `;
             touchBtn.addEventListener('click', (e) => {
                 e.stopPropagation();
-                showConversationActionMenu(conv, item, e);
+                showConversationActionMenu(conv, e);
             });
 
             item.appendChild(leftContainer);
@@ -2753,14 +2840,23 @@ let citationPendingHighlight = null;
                     renderChatHistoryList();
                     loadActiveConversationMessages();
                 }
+                setMobileSidebarOpen(false);
+            });
+            item.addEventListener('keydown', (event) => {
+                if (event.target === item && (event.key === 'Enter' || event.key === ' ')) {
+                    event.preventDefault();
+                    item.click();
+                }
             });
 
             chatHistoryList.appendChild(item);
         });
     }
 
-    function showConversationActionMenu(conv, item, e) {
-        document.querySelectorAll('.history-touch-popover').forEach(el => el.remove());
+    function showConversationActionMenu(conv, e) {
+        activeHistoryPopoverCleanup?.();
+        const trigger = e.currentTarget;
+        const triggerRect = trigger.getBoundingClientRect();
         const popover = document.createElement('div');
         popover.className = 'history-touch-popover';
         popover.innerHTML = `
@@ -2787,7 +2883,7 @@ let citationPendingHighlight = null;
             const btn = ev.target.closest('.touch-popover-item');
             if (!btn) return;
             const action = btn.dataset.action;
-            popover.remove();
+            dismissPopover();
 
             if (action === 'pin') {
                 conv.pinned = !conv.pinned;
@@ -2814,14 +2910,37 @@ let citationPendingHighlight = null;
             }
         });
 
-        item.appendChild(popover);
-        const closeHandler = (event) => {
-            if (!popover.contains(event.target)) {
-                popover.remove();
-                document.removeEventListener('click', closeHandler);
+        document.body.appendChild(popover);
+        const menuWidth = Math.min(popover.offsetWidth, window.innerWidth - 16);
+        const menuHeight = popover.offsetHeight;
+        const left = Math.max(8, Math.min(triggerRect.right - menuWidth, window.innerWidth - menuWidth - 8));
+        const below = triggerRect.bottom + 4;
+        const top = below + menuHeight <= window.innerHeight - 8
+            ? below
+            : Math.max(8, triggerRect.top - menuHeight - 4);
+        popover.style.left = `${left}px`;
+        popover.style.top = `${top}px`;
+        popover.style.maxWidth = `calc(100vw - 16px)`;
+
+        const dismissPopover = () => {
+            popover.remove();
+            document.removeEventListener('click', outsideClickHandler);
+            document.removeEventListener('scroll', dismissPopover, true);
+            window.removeEventListener('resize', dismissPopover);
+            if (activeHistoryPopoverCleanup === dismissPopover) {
+                activeHistoryPopoverCleanup = null;
+                activeHistoryPopoverTrigger = null;
             }
         };
-        setTimeout(() => document.addEventListener('click', closeHandler), 10);
+        const outsideClickHandler = (event) => {
+            if (!popover.contains(event.target)) dismissPopover();
+        };
+        activeHistoryPopoverCleanup = dismissPopover;
+        activeHistoryPopoverTrigger = trigger;
+        document.addEventListener('click', outsideClickHandler);
+        document.addEventListener('scroll', dismissPopover, true);
+        window.addEventListener('resize', dismissPopover);
+        popover.querySelector('.touch-popover-item')?.focus({ preventScroll: true });
     }
 
     async function shareConversation(conv) {

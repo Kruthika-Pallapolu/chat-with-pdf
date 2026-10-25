@@ -107,12 +107,27 @@ class ApiSecurityTests(unittest.TestCase):
     def test_static_allowlist_hides_backup_and_test_files(self):
         index = self.client.get("/")
         self.assertEqual(index.status_code, 200)
-        self.assertIn('href="/static/cwp-favicon.svg"', index.text)
+        self.assertIn('href="/static/cwp-favicon.svg?v=2"', index.text)
         self.assertEqual(self.client.get("/static/app.js").status_code, 200)
         self.assertEqual(self.client.get("/static/cwp-favicon.svg").status_code, 200)
         self.assertEqual(self.client.get("/static/app.js.backup").status_code, 404)
         self.assertEqual(self.client.get("/static/test.pdf").status_code, 404)
         self.assertEqual(self.client.get("/static/../.env").status_code, 404)
+
+    def test_mobile_workspace_uses_stacked_panels_and_keyboard_drawer(self):
+        index = self.client.get("/").text
+        self.assertIn('aria-controls="sidebarPanel"', index)
+        self.assertIn('id="sidebarBackdrop"', index)
+        self.assertIn('role="button" tabindex="0" aria-label="Choose a PDF to upload"', index)
+
+        stylesheet = self.client.get("/static/style.css").text
+        self.assertIn(".workspace-container.mode-split {\n        flex-direction: column;", stylesheet)
+        self.assertIn("height: 100dvh", stylesheet)
+        self.assertIn("env(safe-area-inset-bottom)", stylesheet)
+
+        script = self.client.get("/static/app.js").text
+        self.assertIn("event.key === 'Escape'", script)
+        self.assertIn("setMobileSidebarOpen(false)", script)
 
     def test_guest_wording_and_simplified_settings_are_rendered(self):
         response = self.client.get("/")
