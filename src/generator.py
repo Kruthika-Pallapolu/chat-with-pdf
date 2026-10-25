@@ -6,7 +6,7 @@ from datetime import datetime, timezone
 from google import genai
 from google.genai import types
 from google.genai.errors import ServerError
-from embedder import model
+from embedder import get_model
 
 from search import search
 from pdf_loader import extract_text
@@ -47,7 +47,7 @@ def create_embeddings(chunks):
     Create an embedding vector for every chunk.
     """
     texts = [chunk["text"] for chunk in chunks]
-    embeddings = model.encode(texts)
+    embeddings = get_model().encode(texts)
     return embeddings
 
 
@@ -85,7 +85,7 @@ def retrieve(query, chunks, embeddings, top_k=5):
             c.setdefault("source", "sample")
             sampled.append(c)
 
-        top_matches = search(query, chunks, embeddings, model, top_k=5)
+        top_matches = search(query, chunks, embeddings, get_model(), top_k=5)
 
         seen = set()
         combined = []
@@ -102,7 +102,7 @@ def retrieve(query, chunks, embeddings, top_k=5):
         query,
         chunks,
         embeddings,
-        model,
+        get_model(),
         top_k
     )
     return results
