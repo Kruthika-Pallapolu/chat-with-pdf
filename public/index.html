@@ -582,7 +582,12 @@
                                 </svg>
                                 <span id="loadedDocFilename" class="pdf-filename-display">document.pdf</span>
                             </div>
-                            <span class="pdf-ready-badge">Ready for Reading &amp; Q&amp;A</span>
+                            <span class="pdf-ready-badge">PDF ready — you can start chatting</span>
+                        </div>
+
+                        <div id="pdfUploadStatus" class="pdf-upload-status" role="status" aria-live="polite" aria-atomic="true" aria-busy="false" hidden>
+                            <span class="pdf-upload-spinner" aria-hidden="true"></span>
+                            <span id="pdfUploadStatusText"></span>
                         </div>
 
                         <input type="file" id="pdfFileInput" name="file" accept=".pdf,application/pdf" class="file-input-hidden" tabindex="-1">

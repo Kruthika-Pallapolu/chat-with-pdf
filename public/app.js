@@ -97,6 +97,8 @@ document.addEventListener('DOMContentLoaded', () => {
     // Document Control (Sidebar & Settings)
     const dropZone = document.getElementById('dropZone');
     const pdfLoadedZone = document.getElementById('pdfLoadedZone');
+    const pdfUploadStatus = document.getElementById('pdfUploadStatus');
+    const pdfUploadStatusText = document.getElementById('pdfUploadStatusText');
     const loadedDocFilename = document.getElementById('loadedDocFilename');
     const pdfFileInput = document.getElementById('pdfFileInput');
     const btnRemovePdf = document.getElementById('btnRemovePdf');
@@ -1198,6 +1200,8 @@ let citationPendingHighlight = null;
         if (dropZone) dropZone.style.display = 'none';
         if (pdfLoadedZone) pdfLoadedZone.style.display = 'flex';
         if (loadedDocFilename) loadedDocFilename.textContent = doc.filename;
+        const readyBadge = pdfLoadedZone?.querySelector('.pdf-ready-badge');
+        if (readyBadge) readyBadge.textContent = 'PDF ready — you can start chatting';
         if (btnRemovePdf) btnRemovePdf.style.display = 'inline-block';
 
         if (welcomeTitle) welcomeTitle.textContent = 'Ask structural & conceptual questions grounded in your PDF';
@@ -1366,8 +1370,6 @@ let citationPendingHighlight = null;
     }
 
     async function handlePdfFileUpload(file) {
-        await conversationStateReady;
-        await conversationSaveQueue.catch(() => {});
         if (pdfUploadInProgress) {
             showGlobalAlert('A PDF upload is already being processed.', 'warning');
             return;
@@ -1378,35 +1380,80 @@ let citationPendingHighlight = null;
         }
 
         pdfUploadInProgress = true;
+        setPdfUploadStatus('preparing', `Preparing PDF upload… ${file.name}`);
         const formData = new FormData();
         formData.append('file', file);
-
-        showGlobalAlert(`Uploading and indexing '${file.name}'...`, 'info');
+        let polling = true;
+        let uploadSettled = false;
+        const pollUploadStage = async () => {
+            while (polling) {
+                try {
+                    const statusRes = await fetch('/api/upload/status');
+                    if (!statusRes.ok) {
+                        polling = false;
+                        break;
+                    }
+                    const status = await statusRes.json();
+                    if (!uploadSettled && (status.stage === 'uploading' || status.stage === 'processing')) {
+                        setPdfUploadStatus('processing', `Processing PDF… ${file.name}`);
+                    }
+                } catch (error) {
+                    // Status polling is advisory; the upload request remains authoritative.
+                    polling = false;
+                }
+                if (polling) await new Promise(resolve => setTimeout(resolve, 750));
+            }
+        };
 
         try {
-            const res = await fetch('/api/upload', {
+            await conversationStateReady;
+            await conversationSaveQueue.catch(() => {});
+            setPdfUploadStatus('uploading', `Uploading PDF… ${file.name}`);
+            const uploadRequest = fetch('/api/upload', {
                 method: 'POST',
                 body: formData
             });
+            pollUploadStage();
+            const res = await uploadRequest;
+            uploadSettled = true;
+            polling = false;
 
-            const data = await res.json();
+            const data = await res.json().catch(() => ({}));
             if (res.ok && data.success) {
                 documentRevision += 1;
                 conversations = [];
                 activeConversationId = null;
                 createNewConversation();
                 updateDocumentUI(data.document);
-                await loadPdfDocument('/api/pdf', data.document.filename);
-                showGlobalAlert(`Successfully loaded '${file.name}'.`, 'success');
+                setPdfUploadStatus('ready', 'PDF ready — you can start chatting');
+                try {
+                    await loadPdfDocument('/api/pdf', data.document.filename);
+                } catch (renderError) {
+                    console.error('PDF preview could not be loaded:', renderError);
+                }
             } else {
-                showGlobalAlert(data.detail || 'Failed to upload PDF.', 'error');
+                const errorMessage = data.detail || 'Failed to upload PDF.';
+                setPdfUploadStatus('error', errorMessage);
+                showGlobalAlert(errorMessage, 'error');
             }
         } catch (err) {
             console.error('PDF upload error:', err);
-            showGlobalAlert('Error uploading PDF file to server.', 'error');
+            const errorMessage = 'Could not upload or process the PDF. Check your connection and try again.';
+            setPdfUploadStatus('error', errorMessage);
+            showGlobalAlert(errorMessage, 'error');
         } finally {
+            uploadSettled = true;
+            polling = false;
             pdfUploadInProgress = false;
         }
+    }
+
+    function setPdfUploadStatus(state, message) {
+        if (!pdfUploadStatus || !pdfUploadStatusText) return;
+        pdfUploadStatus.hidden = false;
+        pdfUploadStatus.dataset.state = state;
+        pdfUploadStatus.setAttribute('aria-busy', ['preparing', 'uploading', 'processing'].includes(state) ? 'true' : 'false');
+        pdfUploadStatusText.textContent = message;
     }
 
     function showRemoveConfirmModal() {
@@ -2016,9 +2063,9 @@ let citationPendingHighlight = null;
         fallbackBtn.type = 'button';
         fallbackBtn.className = 'btn-msg-action';
         fallbackBtn.innerHTML = `
-            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                <path d="M12 2v20"></path>
-                <path d="M17 5H9.5a3.5 3.5 0 0 0 0 7H14.5a3.5 3.5 0 0 1 0 7H6"></path>
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                <path d="m12 3 1.8 5.2L19 10l-5.2 1.8L12 17l-1.8-5.2L5 10l5.2-1.8L12 3Z"></path>
+                <path d="m19 15 .8 2.2L22 18l-2.2.8L19 21l-.8-2.2L16 18l2.2-.8L19 15Z"></path>
             </svg>
             <span>Answer using Gemini general knowledge</span>
         `;
@@ -2027,9 +2074,9 @@ let citationPendingHighlight = null;
             setGeneratingState(true);
             fallbackBtn.disabled = true;
             fallbackBtn.innerHTML = `
-                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                    <path d="M12 2v20"></path>
-                    <path d="M17 5H9.5a3.5 3.5 0 0 0 0 7H14.5a3.5 3.5 0 0 1 0 7H6"></path>
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                    <path d="m12 3 1.8 5.2L19 10l-5.2 1.8L12 17l-1.8-5.2L5 10l5.2-1.8L12 3Z"></path>
+                    <path d="m19 15 .8 2.2L22 18l-2.2.8L19 21l-.8-2.2L16 18l2.2-.8L19 15Z"></path>
                 </svg>
                 <span>Using Gemini…</span>
             `;

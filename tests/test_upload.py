@@ -75,6 +75,34 @@ class UploadIsolationTests(unittest.TestCase):
         self.assertEqual(second.get("/api/pdf").status_code, 404)
         self.assertEqual(first.get("/api/pdf").content, first_pdf_before_second_replacement)
 
+    def test_upload_status_reports_processing_then_returns_to_idle(self):
+        client = self.client()
+        self.assertEqual(client.get("/api/upload/status").json()["stage"], "idle")
+        original_build = server._build_document_state
+        original_mkstemp = server.tempfile.mkstemp
+        observed_stages = []
+
+        def observe_staging(*args, **kwargs):
+            response = client.get("/api/upload/status")
+            self.assertEqual(response.status_code, 200)
+            observed_stages.append(response.json()["stage"])
+            return original_mkstemp(*args, **kwargs)
+
+        def observe_processing(path, filename):
+            response = client.get("/api/upload/status")
+            self.assertEqual(response.status_code, 200)
+            observed_stages.append(response.json()["stage"])
+            return original_build(path, filename)
+
+        with mock.patch.object(server.tempfile, "mkstemp", side_effect=observe_staging):
+            with mock.patch.object(server, "_build_document_state", side_effect=observe_processing):
+                response = self.upload(client, "progress.pdf", "A document ready for processing.")
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(observed_stages[:2], ["uploading", "processing"])
+        self.assertTrue(all(stage == "processing" for stage in observed_stages[1:]))
+        self.assertEqual(client.get("/api/upload/status").json()["stage"], "idle")
+
     def test_new_session_cannot_read_or_query_another_session_document(self):
         owner, stranger = self.client(), self.client()
         self.assertEqual(self.upload(owner, "private.pdf", "owner-only passage").status_code, 200)
@@ -90,7 +118,12 @@ class UploadIsolationTests(unittest.TestCase):
 
     def test_failed_replacement_preserves_existing_document(self):
         client = self.client()
-        self.assertEqual(self.upload(client, "active.pdf", "original passage").status_code, 200)
+        initial_upload = self.upload(client, "active.pdf", "original passage")
+        self.assertEqual(initial_upload.status_code, 200)
+        self.assertEqual(client.put("/api/conversations", json={
+            "conversations": [{"id": "kept"}],
+            "document_hash": initial_upload.json()["document"]["hash"],
+        }).status_code, 200)
         previous_bytes = client.get("/api/pdf").content
         with mock.patch.object(server, "_build_document_state", side_effect=ValueError("private path /secret")):
             response = self.upload(client, "active.pdf", "replacement passage")
@@ -98,6 +131,8 @@ class UploadIsolationTests(unittest.TestCase):
         self.assertEqual(response.status_code, 400)
         self.assertNotIn("/secret", response.text)
         self.assertEqual(client.get("/api/pdf").content, previous_bytes)
+        self.assertEqual(client.get("/api/conversations").json()["conversations"], [{"id": "kept"}])
+        self.assertEqual(client.get("/api/upload/status").json()["stage"], "idle")
 
     def test_oversized_upload_is_rejected_before_processing(self):
         client = self.client()

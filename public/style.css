@@ -572,6 +572,42 @@ textarea:focus-visible {
     color: var(--success);
 }
 
+.pdf-upload-status {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin-top: 8px;
+    color: var(--text-muted);
+    font-size: 0.75rem;
+    overflow-wrap: anywhere;
+}
+
+.pdf-upload-status[hidden] {
+    display: none;
+}
+
+.pdf-upload-spinner {
+    width: 14px;
+    height: 14px;
+    flex: 0 0 14px;
+    border: 2px solid var(--border-color);
+    border-top-color: var(--accent);
+    border-radius: 50%;
+    animation: pdf-upload-spin 0.8s linear infinite;
+}
+
+.pdf-upload-status[data-state="error"] .pdf-upload-spinner {
+    display: none;
+}
+
+@keyframes pdf-upload-spin {
+    to { transform: rotate(360deg); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+    .pdf-upload-spinner { animation-duration: 1.8s; }
+}
+
 .file-input-hidden {
     position: absolute;
     width: 1px;

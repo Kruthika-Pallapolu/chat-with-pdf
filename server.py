@@ -94,6 +94,16 @@ DOCUMENT_LOAD_SEMAPHORE = threading.BoundedSemaphore(max(1, int(os.getenv("MAX_C
 _session_store_instance = None
 _session_store_path = None
 _session_store_guard = threading.Lock()
+_upload_progress = {}
+_upload_progress_guard = threading.Lock()
+
+
+def _set_upload_progress(session_id, stage):
+    with _upload_progress_guard:
+        if stage is None:
+            _upload_progress.pop(session_id, None)
+        else:
+            _upload_progress[session_id] = stage
 
 
 def get_session_store():
@@ -532,6 +542,15 @@ def get_status(request: Request):
             "answer_memory": {"text": saved_mem, "is_active": bool(saved_mem)},
         }
 
+@app.get("/api/upload/status")
+def get_upload_status(request: Request):
+    """Expose only this session's upload stage without waiting on its processing lock."""
+    session_id = _request_session(request).session_id
+    _request_allowed(request, session_id, "upload-status", int(os.getenv("MAX_STATUS_PER_MINUTE", "120")))
+    with _upload_progress_guard:
+        stage = _upload_progress.get(session_id, "idle")
+    return {"stage": stage}
+
 @app.get("/api/memory")
 def get_memory(request: Request):
     """Retrieve the current session's answer presentation preference."""
@@ -650,6 +669,7 @@ def upload_pdf(request: Request, file: UploadFile = File(...)):
     staged_path = None
     try:
         with get_session_store().lock_for(session_id):
+            _set_upload_progress(session_id, "uploading")
             descriptor, staged_path = tempfile.mkstemp(prefix=".cwp-upload-", suffix=".pdf", dir=session_dir)
             total_bytes = 0
             with os.fdopen(descriptor, "wb") as buffer:
@@ -661,6 +681,7 @@ def upload_pdf(request: Request, file: UploadFile = File(...)):
                     if total_bytes > MAX_PDF_BYTES:
                         raise HTTPException(status_code=413, detail="PDF exceeds the configured upload size limit.")
                     buffer.write(chunk)
+            _set_upload_progress(session_id, "processing")
             candidate = _build_document_state(staged_path, filename)
             _store_document_state(session_id, candidate)
             get_session_store().set_conversations(session_id, [])
@@ -685,6 +706,7 @@ def upload_pdf(request: Request, file: UploadFile = File(...)):
         logger.error("PDF upload failed (%s).", type(error).__name__)
         raise HTTPException(status_code=400, detail="PDF processing failed. Verify the file is readable and not encrypted.") from None
     finally:
+        _set_upload_progress(session_id, None)
         if staged_path:
             try:
                 os.unlink(staged_path)
