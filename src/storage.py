@@ -8,7 +8,9 @@ def get_file_hash(file_path):
     The hash acts like a fingerprint for the PDF.
     """
 
+    digest = hashlib.sha256()
     with open(file_path, "rb") as file:
-        file_bytes = file.read()
+        for file_chunk in iter(lambda: file.read(1024 * 1024), b""):
+            digest.update(file_chunk)
 
-    return hashlib.sha256(file_bytes).hexdigest()
+    return digest.hexdigest()

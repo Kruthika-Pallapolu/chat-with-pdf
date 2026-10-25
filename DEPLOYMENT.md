@@ -26,6 +26,8 @@ Set these deployment variables in the hosting platform's environment settings (d
 - `FORWARDED_ALLOW_IPS` to the proxy IPs or ranges that the host documents; do not trust arbitrary forwarded headers
 - `GEMINI_API_KEY` if Gemini-powered answers are required
 
+For a 512 MB instance, also keep `CWP_NATIVE_THREAD_LIMIT=1`, `MAX_CONCURRENT_MODEL_REQUESTS=1`, `MAX_CONCURRENT_PDF_PROCESSES=1`, and `MAX_CONCURRENT_DOCUMENT_LOADS=1`. These values bound native thread pools and memory-heavy work across sessions; increasing them can increase peak memory.
+
 Start one process with `python server.py`. Production mode disables reload and configures one Uvicorn worker. Keep one worker: the session locks and in-memory document cache are process-local, and multi-worker behavior has not been verified. `requirements.txt` declares the Python dependencies; the deployment environment still needs network access to install them and, on a cold start without a cached model, download `all-MiniLM-L6-v2` from Hugging Face. No provider-specific build file or clean-environment install check is currently included.
 
 ## Data handling and service limits

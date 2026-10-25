@@ -55,13 +55,14 @@ def get_ordinal_word(n: int) -> str:
     return f"{n}th"
 
 
-def find_module_headings(pdf_file: str) -> List[str]:
+def find_module_headings(pdf_file: Optional[str] = None, pages: Optional[List[Dict[str, Any]]] = None) -> List[str]:
     """
     Find all module/section headings directly from the PDF text.
     """
-    if not os.path.exists(pdf_file):
-        return []
-    pages = extract_text(pdf_file)
+    if pages is None:
+        if not pdf_file or not os.path.exists(pdf_file):
+            return []
+        pages = extract_text(pdf_file)
     modules = []
 
     mod_pattern = re.compile(

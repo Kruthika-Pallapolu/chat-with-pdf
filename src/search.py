@@ -1,6 +1,7 @@
 from sklearn.metrics.pairwise import cosine_similarity
 import re
 from difflib import SequenceMatcher
+from embedder import encode_texts
 
 
 def clean_query(query: str) -> str:
@@ -28,7 +29,7 @@ def search(query, chunks, embeddings, model, top_k=5, threshold=0.25):
     cleaned_q = clean_query(query)
 
     # 1. Semantic Cosine Similarity
-    query_embedding = model.encode([cleaned_q if cleaned_q else query])
+    query_embedding = encode_texts([cleaned_q if cleaned_q else query], model=model)
     similarities = cosine_similarity(query_embedding, embeddings)[0]
 
     # 2. Keyword & Multi-word Phrase Extraction

@@ -18,7 +18,7 @@ class EmbeddingModelLifecycleTests(unittest.TestCase):
         instances = []
         instances_lock = threading.Lock()
 
-        def build_model(name):
+        def build_model(name, **kwargs):
             time.sleep(0.03)
             instance = object()
             with instances_lock:
@@ -34,6 +34,35 @@ class EmbeddingModelLifecycleTests(unittest.TestCase):
         finally:
             with embedder._model_load_lock:
                 embedder._model = previous_model
+
+    def test_model_inference_is_serialized_with_small_batches(self):
+        state_lock = threading.Lock()
+        active_calls = 0
+        peak_calls = 0
+        observed_kwargs = []
+
+        class FakeModel:
+            def encode(self, texts, **kwargs):
+                nonlocal active_calls, peak_calls
+                with state_lock:
+                    active_calls += 1
+                    peak_calls = max(peak_calls, active_calls)
+                    observed_kwargs.append(kwargs)
+                time.sleep(0.02)
+                with state_lock:
+                    active_calls -= 1
+                return texts
+
+        with ThreadPoolExecutor(max_workers=8) as pool:
+            results = list(pool.map(
+                lambda _: embedder.encode_texts(["query"], model=FakeModel()),
+                range(8),
+            ))
+
+        self.assertEqual(peak_calls, 1)
+        self.assertEqual(results, [["query"]] * 8)
+        self.assertTrue(all(kwargs["batch_size"] == 8 for kwargs in observed_kwargs))
+        self.assertTrue(all(kwargs["show_progress_bar"] is False for kwargs in observed_kwargs))
 
 
 if __name__ == "__main__":

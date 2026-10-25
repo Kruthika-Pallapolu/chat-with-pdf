@@ -9,12 +9,6 @@ import secrets
 import time
 from pathlib import Path
 from typing import List, Optional
-import fitz
-import numpy as np
-from pydantic import BaseModel
-from fastapi import FastAPI, File, UploadFile, HTTPException, Form, Request
-from fastapi.exceptions import RequestValidationError
-from fastapi.responses import FileResponse, JSONResponse, Response
 from dotenv import load_dotenv, find_dotenv
 
 # Ensure .env is dynamically located and loaded with override=True
@@ -23,6 +17,20 @@ if dotenv_path:
     load_dotenv(dotenv_path, override=False)
 else:
     load_dotenv(os.path.join(os.path.dirname(__file__), ".env"), override=False)
+
+# Bound native thread pools before importing NumPy, scikit-learn, or PyTorch.
+NATIVE_THREAD_LIMIT = max(1, int(os.getenv("CWP_NATIVE_THREAD_LIMIT", "1")))
+for _thread_env in ("OMP_NUM_THREADS", "MKL_NUM_THREADS", "OPENBLAS_NUM_THREADS", "NUMEXPR_NUM_THREADS"):
+    os.environ[_thread_env] = str(NATIVE_THREAD_LIMIT)
+os.environ.setdefault("TOKENIZERS_PARALLELISM", "false")
+
+# Import numerical and ML-adjacent libraries only after thread limits are in place.
+import fitz
+import numpy as np
+from pydantic import BaseModel
+from fastapi import FastAPI, File, UploadFile, HTTPException, Form, Request
+from fastapi.exceptions import RequestValidationError
+from fastapi.responses import FileResponse, JSONResponse, Response
 
 # Add src to sys.path so backend modules can be imported directly
 PROJECT_ROOT = os.path.dirname(os.path.abspath(__file__))
@@ -88,9 +96,9 @@ MAX_PDF_TEXT_CHARS = int(os.getenv("MAX_PDF_TEXT_CHARS", str(2_000_000)))
 MAX_IMAGE_BYTES = int(os.getenv("MAX_IMAGE_BYTES", str(5 * 1024 * 1024)))
 MAX_QUESTION_CHARS = int(os.getenv("MAX_QUESTION_CHARS", "4000"))
 MAX_CONVERSATIONS_BYTES = int(os.getenv("MAX_CONVERSATIONS_BYTES", str(2 * 1024 * 1024)))
-MODEL_WORK_SEMAPHORE = threading.BoundedSemaphore(max(1, int(os.getenv("MAX_CONCURRENT_MODEL_REQUESTS", "2"))))
-PDF_PROCESS_SEMAPHORE = threading.BoundedSemaphore(max(1, int(os.getenv("MAX_CONCURRENT_PDF_PROCESSES", "2"))))
-DOCUMENT_LOAD_SEMAPHORE = threading.BoundedSemaphore(max(1, int(os.getenv("MAX_CONCURRENT_DOCUMENT_LOADS", "2"))))
+MODEL_WORK_SEMAPHORE = threading.BoundedSemaphore(max(1, int(os.getenv("MAX_CONCURRENT_MODEL_REQUESTS", "1"))))
+PDF_PROCESS_SEMAPHORE = threading.BoundedSemaphore(max(1, int(os.getenv("MAX_CONCURRENT_PDF_PROCESSES", "1"))))
+DOCUMENT_LOAD_SEMAPHORE = threading.BoundedSemaphore(max(1, int(os.getenv("MAX_CONCURRENT_DOCUMENT_LOADS", "1"))))
 _session_store_instance = None
 _session_store_path = None
 _session_store_guard = threading.Lock()
@@ -353,7 +361,7 @@ def _build_document_state_impl(pdf_path: str, filename: str):
         raise ValueError("PDF contains no extractable text.")
     with MODEL_WORK_SEMAPHORE:
         embeddings = create_embeddings(chunks)
-    modules = find_module_headings(pdf_path)
+    modules = find_module_headings(pages=pages)
     with MODEL_WORK_SEMAPHORE:
         suggested_q = generate_suggested_questions(pages)
     return DocumentState(
