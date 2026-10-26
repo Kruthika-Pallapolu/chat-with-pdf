@@ -42,7 +42,7 @@ if SRC_DIR not in sys.path:
 # Import existing Python RAG backend modules
 from pdf_loader import extract_text
 from chunker import chunk_text
-from embedder import create_embeddings
+from embedder import EMBEDDING_BATCH_SIZE, create_embeddings
 from storage import (
     get_file_hash,
 )
@@ -340,6 +340,19 @@ if not logger.handlers:
     logger.addHandler(_cwp_handler)
 logger.propagate = False
 
+
+def _process_peak_rss_mb():
+    """Return the process high-water RSS in MiB when the platform exposes it."""
+    try:
+        import resource
+
+        peak_rss = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
+    except (ImportError, AttributeError, OSError, ValueError):
+        return None
+    # macOS reports bytes; Linux (Render) reports KiB.
+    divisor = 1024 * 1024 if sys.platform == "darwin" else 1024
+    return peak_rss / divisor
+
 class PdfLimitError(Exception):
     pass
 
@@ -406,10 +419,13 @@ def _build_document_state_impl(pdf_path: str, filename: str):
             with MODEL_WORK_SEMAPHORE:
                 embeddings = create_embeddings(chunks)
         finally:
+            peak_rss_mb = _process_peak_rss_mb()
             logger.info(
-                "pdf_processing stage=embedding_generation chunks=%d duration_ms=%.2f",
+                "pdf_processing stage=embedding_generation chunks=%d batch_size=%d duration_ms=%.2f process_peak_rss_mb=%s rss_scope=process_lifetime_high_water",
                 chunk_count,
+                EMBEDDING_BATCH_SIZE,
                 (time.perf_counter() - stage_started) * 1000,
+                f"{peak_rss_mb:.1f}" if peak_rss_mb is not None else "unavailable",
             )
 
         stage_started = time.perf_counter()

@@ -1,5 +1,6 @@
 
 import os
+import logging
 import threading
 
 _thread_limit = max(1, int(os.getenv("CWP_NATIVE_THREAD_LIMIT", "1")))
@@ -23,7 +24,28 @@ from chunker import chunk_text
 _model = None
 _model_load_lock = threading.Lock()
 _model_inference_lock = threading.Lock()
-EMBEDDING_BATCH_SIZE = 8
+DEFAULT_EMBEDDING_BATCH_SIZE = 8
+SUPPORTED_EMBEDDING_BATCH_SIZES = frozenset((8, 12))
+logger = logging.getLogger("cwp")
+
+
+def _parse_embedding_batch_size(raw_value):
+    try:
+        batch_size = int(raw_value)
+    except (TypeError, ValueError):
+        logger.warning("Invalid CWP_EMBEDDING_BATCH_SIZE; using safe default 8.")
+        return DEFAULT_EMBEDDING_BATCH_SIZE
+    if batch_size not in SUPPORTED_EMBEDDING_BATCH_SIZES:
+        logger.warning("Unsupported CWP_EMBEDDING_BATCH_SIZE; using safe default 8.")
+        return DEFAULT_EMBEDDING_BATCH_SIZE
+    return batch_size
+
+
+def _configured_embedding_batch_size():
+    return _parse_embedding_batch_size(os.getenv("CWP_EMBEDDING_BATCH_SIZE", "8"))
+
+
+EMBEDDING_BATCH_SIZE = _configured_embedding_batch_size()
 
 
 def get_model():
