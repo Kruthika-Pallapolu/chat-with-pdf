@@ -333,6 +333,12 @@ class DocumentState:
         self.is_ready = is_ready
 
 logger = logging.getLogger("cwp")
+logger.setLevel(logging.INFO)
+if not logger.handlers:
+    _cwp_handler = logging.StreamHandler()
+    _cwp_handler.setFormatter(logging.Formatter("%(levelname)s:%(name)s:%(message)s"))
+    logger.addHandler(_cwp_handler)
+logger.propagate = False
 
 class PdfLimitError(Exception):
     pass
@@ -344,40 +350,112 @@ def _build_document_state(pdf_path: str, filename: str):
 
 
 def _build_document_state_impl(pdf_path: str, filename: str):
-    if os.path.getsize(pdf_path) > MAX_PDF_BYTES:
-        raise PdfLimitError("PDF exceeds the configured upload size limit.")
-    with fitz.open(pdf_path) as pdf:
-        if pdf.is_encrypted:
-            raise ValueError("Encrypted PDFs are not supported.")
-        if len(pdf) < 1:
-            raise ValueError("PDF contains no pages.")
-        if len(pdf) > MAX_PDF_PAGES:
-            raise PdfLimitError("PDF exceeds the configured page limit.")
+    total_started = time.perf_counter()
+    page_count = 0
+    chunk_count = 0
+    module_heading_count = 0
+    suggested_question_count = 0
+    try:
+        stage_started = time.perf_counter()
+        try:
+            if os.path.getsize(pdf_path) > MAX_PDF_BYTES:
+                raise PdfLimitError("PDF exceeds the configured upload size limit.")
+            with fitz.open(pdf_path) as pdf:
+                if pdf.is_encrypted:
+                    raise ValueError("Encrypted PDFs are not supported.")
+                if len(pdf) < 1:
+                    raise ValueError("PDF contains no pages.")
+                if len(pdf) > MAX_PDF_PAGES:
+                    raise PdfLimitError("PDF exceeds the configured page limit.")
+            current_hash = get_file_hash(pdf_path)
+        finally:
+            logger.info(
+                "pdf_processing stage=validation_hash duration_ms=%.2f",
+                (time.perf_counter() - stage_started) * 1000,
+            )
 
-    current_hash = get_file_hash(pdf_path)
-    pages = extract_text(pdf_path)
-    if sum(len(page.get("text", "")) for page in pages) > MAX_PDF_TEXT_CHARS:
-        raise PdfLimitError("PDF exceeds the configured extracted-text limit.")
-    chunks = chunk_text(pages)
-    if not chunks:
-        raise ValueError("PDF contains no extractable text.")
-    with MODEL_WORK_SEMAPHORE:
-        embeddings = create_embeddings(chunks)
-    modules = find_module_headings(pages=pages)
-    with MODEL_WORK_SEMAPHORE:
-        suggested_q = generate_suggested_questions(pages)
-    return DocumentState(
-        filename=filename,
-        pdf_path=pdf_path,
-        pdf_hash=current_hash,
-        chunks=chunks,
-        embeddings=embeddings,
-        pages_count=len(pages),
-        page_texts=[page["text"] for page in pages],
-        modules=modules,
-        suggested_questions=suggested_q,
-        is_ready=True,
-    )
+        stage_started = time.perf_counter()
+        try:
+            pages = extract_text(pdf_path)
+            page_count = len(pages)
+            if sum(len(page.get("text", "")) for page in pages) > MAX_PDF_TEXT_CHARS:
+                raise PdfLimitError("PDF exceeds the configured extracted-text limit.")
+        finally:
+            logger.info(
+                "pdf_processing stage=text_extraction pages=%d duration_ms=%.2f",
+                page_count,
+                (time.perf_counter() - stage_started) * 1000,
+            )
+
+        stage_started = time.perf_counter()
+        try:
+            chunks = chunk_text(pages)
+            chunk_count = len(chunks)
+            if not chunks:
+                raise ValueError("PDF contains no extractable text.")
+        finally:
+            logger.info(
+                "pdf_processing stage=text_chunking pages=%d chunks=%d duration_ms=%.2f",
+                page_count,
+                chunk_count,
+                (time.perf_counter() - stage_started) * 1000,
+            )
+
+        stage_started = time.perf_counter()
+        try:
+            with MODEL_WORK_SEMAPHORE:
+                embeddings = create_embeddings(chunks)
+        finally:
+            logger.info(
+                "pdf_processing stage=embedding_generation chunks=%d duration_ms=%.2f",
+                chunk_count,
+                (time.perf_counter() - stage_started) * 1000,
+            )
+
+        stage_started = time.perf_counter()
+        try:
+            modules = find_module_headings(pages=pages)
+            module_heading_count = len(modules)
+        finally:
+            logger.info(
+                "pdf_processing stage=module_heading_detection headings=%d duration_ms=%.2f",
+                module_heading_count,
+                (time.perf_counter() - stage_started) * 1000,
+            )
+
+        stage_started = time.perf_counter()
+        try:
+            with MODEL_WORK_SEMAPHORE:
+                suggested_q = generate_suggested_questions(pages)
+            suggested_question_count = len(suggested_q)
+        finally:
+            logger.info(
+                "pdf_processing stage=suggested_question_generation questions=%d duration_ms=%.2f",
+                suggested_question_count,
+                (time.perf_counter() - stage_started) * 1000,
+            )
+
+        return DocumentState(
+            filename=filename,
+            pdf_path=pdf_path,
+            pdf_hash=current_hash,
+            chunks=chunks,
+            embeddings=embeddings,
+            pages_count=len(pages),
+            page_texts=[page["text"] for page in pages],
+            modules=modules,
+            suggested_questions=suggested_q,
+            is_ready=True,
+        )
+    finally:
+        logger.info(
+            "pdf_processing stage=total duration_ms=%.2f pages=%d chunks=%d module_headings=%d suggested_questions=%d",
+            (time.perf_counter() - total_started) * 1000,
+            page_count,
+            chunk_count,
+            module_heading_count,
+            suggested_question_count,
+        )
 
 
 def _get_document_state(session_id, seed_default=True):

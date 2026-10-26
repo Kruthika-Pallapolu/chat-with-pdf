@@ -596,7 +596,8 @@ textarea:focus-visible {
     animation: pdf-upload-spin 0.8s linear infinite;
 }
 
-.pdf-upload-status[data-state="error"] .pdf-upload-spinner {
+.pdf-upload-status[data-state="error"] .pdf-upload-spinner,
+.pdf-upload-status[data-state="ready"] .pdf-upload-spinner {
     display: none;
 }
 

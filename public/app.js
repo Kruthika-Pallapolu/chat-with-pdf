@@ -1430,7 +1430,7 @@ let citationPendingHighlight = null;
                 activeConversationId = null;
                 updateDocumentUI(data.document);
                 createNewConversation();
-                setPdfUploadStatus('ready', 'PDF ready — you can start chatting');
+                setPdfUploadStatus('ready', 'PDF loaded successfully!');
                 try {
                     await loadPdfDocument('/api/pdf', data.document.filename);
                 } catch (renderError) {

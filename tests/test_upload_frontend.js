@@ -21,6 +21,13 @@ const successPathStart = source.indexOf('if (res.ok && data.success) {', source.
 const documentUpdate = source.indexOf('updateDocumentUI(data.document);', successPathStart);
 const freshConversation = source.indexOf('createNewConversation();', successPathStart);
 assert.ok(documentUpdate < freshConversation, 'new conversation saves with the new document hash');
+assert.match(source, /setPdfUploadStatus\('ready', 'PDF loaded successfully!'\)/,
+    'successful processing shows the requested confirmation');
+assert.match(source, /!uploadSettled && \(status\.stage === 'uploading' \|\| status\.stage === 'processing'\)/,
+    'polling cannot replace the success state after the upload request settles');
+const uploadCss = fs.readFileSync('public/style.css', 'utf8');
+assert.match(uploadCss, /\.pdf-upload-status\[data-state="ready"\] \.pdf-upload-spinner\s*\{\s*display: none;/,
+    'the spinner is hidden only for the backend-confirmed ready state');
 assert.match(source, /if \(pdfUploadInProgress\) \{\s*conversationSavePending = true;/,
     'conversation writes are deferred during a replacement upload');
 assert.match(source, /Upload completion could not be confirmed\./,
