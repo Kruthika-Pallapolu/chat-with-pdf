@@ -99,6 +99,7 @@ document.addEventListener('DOMContentLoaded', () => {
     const pdfLoadedZone = document.getElementById('pdfLoadedZone');
     const pdfUploadStatus = document.getElementById('pdfUploadStatus');
     const pdfUploadStatusText = document.getElementById('pdfUploadStatusText');
+    const pdfUploadStatusDetail = document.getElementById('pdfUploadStatusDetail');
     const loadedDocFilename = document.getElementById('loadedDocFilename');
     const pdfFileInput = document.getElementById('pdfFileInput');
     const btnRemovePdf = document.getElementById('btnRemovePdf');
@@ -169,6 +170,7 @@ document.addEventListener('DOMContentLoaded', () => {
     let currentSession = null;
     let currentDocument = null;
     let currentViewMode = 'split'; // 'pdf', 'chat', 'split'
+    let hasManuallySelectedWorkspaceView = false;
     let currentHighlightColor = localStorage.getItem('cwp_highlight_color') || '#fde047';
 let skipAutoRender = false;
         let documentRevision = 0;
@@ -275,9 +277,27 @@ let citationPendingHighlight = null;
         viewModeToggleBtns.forEach(btn => {
             btn.addEventListener('click', () => {
                 const mode = btn.getAttribute('data-mode');
+                hasManuallySelectedWorkspaceView = true;
                 setWorkspaceViewMode(mode);
             });
         });
+
+        const mobileWorkspaceQuery = window.matchMedia('(max-width: 768px)');
+        const syncDefaultViewToViewport = event => {
+            if (!hasManuallySelectedWorkspaceView) {
+                setWorkspaceViewMode(getDefaultWorkspaceViewMode(event.matches));
+            }
+        };
+        if (typeof mobileWorkspaceQuery.addEventListener === 'function') {
+            mobileWorkspaceQuery.addEventListener('change', syncDefaultViewToViewport);
+        } else if (typeof mobileWorkspaceQuery.addListener === 'function') {
+            mobileWorkspaceQuery.addListener(syncDefaultViewToViewport);
+        }
+        setWorkspaceViewMode(getDefaultWorkspaceViewMode(mobileWorkspaceQuery.matches));
+    }
+
+    function getDefaultWorkspaceViewMode(isMobile) {
+        return isMobile ? 'chat' : 'split';
     }
 
     function setWorkspaceViewMode(mode) {
@@ -1400,7 +1420,7 @@ let citationPendingHighlight = null;
         }
 
         pdfUploadInProgress = true;
-        setPdfUploadStatus('preparing', `Preparing PDF upload… ${file.name}`);
+        setPdfUploadStatus('preparing', 'Preparing your PDF upload...');
         const formData = new FormData();
         formData.append('file', file);
         let uploadRequestStartedAt = null;
@@ -1419,8 +1439,12 @@ let citationPendingHighlight = null;
                         polling = false;
                         break;
                     }
-                    if (!uploadSettled && (status.stage === 'uploading' || status.stage === 'processing')) {
-                        setPdfUploadStatus('processing', `Processing PDF… ${file.name}`);
+                    if (!uploadSettled && status.stage === 'processing') {
+                        setPdfUploadStatus(
+                            'processing',
+                            'Processing your PDF...',
+                            "We're extracting the text and preparing your document for AI-powered search. This may take a minute or two, depending on the PDF's size. Please keep this page open while processing completes."
+                        );
                     }
                 } catch (error) {
                     // Status polling is advisory; the upload request remains authoritative.
@@ -1433,7 +1457,11 @@ let citationPendingHighlight = null;
         try {
             await conversationStateReady;
             await conversationSaveQueue.catch(() => {});
-            setPdfUploadStatus('uploading', `Uploading PDF… ${file.name}`);
+            setPdfUploadStatus(
+                'uploading',
+                'Uploading your PDF...',
+                'Your document is being uploaded securely.'
+            );
             uploadRequestStartedAt = Date.now();
             const uploadRequest = fetch('/api/upload', {
                 method: 'POST',
@@ -1452,7 +1480,7 @@ let citationPendingHighlight = null;
                 activeConversationId = null;
                 updateDocumentUI(data.document);
                 createNewConversation();
-                setPdfUploadStatus('ready', 'PDF loaded successfully!');
+                setPdfUploadStatus('ready', 'Your PDF is ready! You can now ask questions about it.');
                 try {
                     await loadPdfDocument('/api/pdf', data.document.filename);
                 } catch (renderError) {
@@ -1482,12 +1510,16 @@ let citationPendingHighlight = null;
         }
     }
 
-    function setPdfUploadStatus(state, message) {
+    function setPdfUploadStatus(state, message, detail = '') {
         if (!pdfUploadStatus || !pdfUploadStatusText) return;
         pdfUploadStatus.hidden = false;
         pdfUploadStatus.dataset.state = state;
         pdfUploadStatus.setAttribute('aria-busy', ['preparing', 'uploading', 'processing'].includes(state) ? 'true' : 'false');
         pdfUploadStatusText.textContent = message;
+        if (pdfUploadStatusDetail) {
+            pdfUploadStatusDetail.textContent = detail;
+            pdfUploadStatusDetail.hidden = !detail;
+        }
     }
 
     async function readJsonResponseSafely(response) {
