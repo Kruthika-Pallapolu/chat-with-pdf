@@ -121,7 +121,7 @@ def _load_server(retrieve_results, model_answer):
                      "fastapi.responses": {"FileResponse": object, "JSONResponse": lambda **k: k, "Response": object}}.items():
         m = types.ModuleType(n); [setattr(m, k, v) for k, v in attrs.items()]; sys.modules[n] = m
     for n, attrs in {"pdf_loader": {"extract_text": lambda p: []}, "chunker": {"chunk_text": lambda p: []},
-                     "embedder": {"create_embeddings": lambda c: None},
+                     "embedder": {"create_embeddings": lambda c: None, "EMBEDDING_BATCH_SIZE": 8},
                      "storage": {k: (lambda *a, **kw: "") for k in ["save_index","load_index","get_file_hash","save_answer_memory","load_answer_memory","clear_answer_memory"]},
                      "document_search": {"find_module_headings": lambda p: [], "get_structural_answer": lambda q, p: None}}.items():
         m = types.ModuleType(n); [setattr(m, k, v) for k, v in attrs.items()]; sys.modules[n] = m

@@ -587,7 +587,10 @@
 
                         <div id="pdfUploadStatus" class="pdf-upload-status" role="status" aria-live="polite" aria-atomic="true" aria-busy="false" hidden>
                             <span class="pdf-upload-spinner" aria-hidden="true"></span>
-                            <span id="pdfUploadStatusText"></span>
+                            <div class="pdf-upload-status-content">
+                                <strong id="pdfUploadStatusText" class="pdf-upload-status-title"></strong>
+                                <span id="pdfUploadStatusDetail" class="pdf-upload-status-detail" hidden></span>
+                            </div>
                         </div>
 
                         <input type="file" id="pdfFileInput" name="file" accept=".pdf,application/pdf" class="file-input-hidden" tabindex="-1">

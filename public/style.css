@@ -574,12 +574,44 @@ textarea:focus-visible {
 
 .pdf-upload-status {
     display: flex;
-    align-items: center;
-    gap: 8px;
+    align-items: flex-start;
+    gap: 10px;
     margin-top: 8px;
     color: var(--text-muted);
     font-size: 0.75rem;
     overflow-wrap: anywhere;
+    min-width: 0;
+}
+
+.pdf-upload-status-content {
+    display: flex;
+    flex: 1 1 auto;
+    flex-direction: column;
+    gap: 3px;
+    min-width: 0;
+}
+
+.pdf-upload-status-title {
+    color: var(--text-main);
+    font-size: 0.8rem;
+    line-height: 1.35;
+}
+
+.pdf-upload-status-detail {
+    display: block;
+    line-height: 1.45;
+}
+
+.pdf-upload-status-detail[hidden] {
+    display: none;
+}
+
+.pdf-upload-status[data-state="ready"] .pdf-upload-status-title {
+    color: var(--success);
+}
+
+.pdf-upload-status[data-state="error"] .pdf-upload-status-title {
+    color: var(--danger);
 }
 
 .pdf-upload-status[hidden] {

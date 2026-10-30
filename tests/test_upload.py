@@ -49,8 +49,12 @@ class UploadIsolationTests(unittest.TestCase):
     def client(self):
         return TestClient(server.app, base_url="https://testserver", headers={"Origin": "https://testserver"})
 
-    def upload(self, client, filename, text):
-        return client.post("/api/upload", files={"file": (filename, make_pdf(text), "application/pdf")})
+    def upload(self, client, filename, text, headers=None):
+        return client.post(
+            "/api/upload",
+            files={"file": (filename, make_pdf(text), "application/pdf")},
+            headers=headers,
+        )
 
     def pdf_text(self, client):
         response = client.get("/api/pdf")
@@ -106,6 +110,75 @@ class UploadIsolationTests(unittest.TestCase):
         self.assertEqual(observed_stages[:2], ["uploading", "processing"])
         self.assertTrue(all(stage == "processing" for stage in observed_stages[1:]))
         self.assertEqual(client.get("/api/upload/status").json()["stage"], "idle")
+
+    def test_successful_upload_emits_correlated_privacy_safe_stage_events(self):
+        client = self.client()
+        filename = "private-diagnostic-name.pdf"
+        document_text = "PRIVATE_PDF_CONTENT_FOR_DIAGNOSTIC_TEST"
+        request_id = "c0cbfa69-dab7-40ee"
+        api_key = "PRIVATE_API_KEY_SENTINEL"
+
+        with mock.patch.dict(os.environ, {"GEMINI_API_KEY": api_key}):
+            with self.assertLogs("cwp", level="INFO") as captured:
+                response = self.upload(
+                    client,
+                    filename,
+                    document_text,
+                    headers={"Rndr-Id": request_id},
+                )
+
+        self.assertEqual(response.status_code, 200)
+        logs = "\n".join(captured.output)
+        for event in (
+            "request_received",
+            "handler_entry",
+            "multipart_file_received",
+            "input_validation_completed",
+            "staged_file_written",
+            "validation_completed",
+            "text_extraction_completed",
+            "chunking_completed",
+            "embedding_generation_completed",
+            "document_processing_complete",
+            "document_persistence_completed",
+            "success_response_prepared",
+            "response_started",
+        ):
+            with self.subTest(event=event):
+                self.assertIn(f"event={event}", logs)
+        self.assertIn(f"request_id={request_id}", logs)
+        self.assertIn("request_id_source=render", logs)
+        self.assertIn("outcome=success", logs)
+        self.assertIn("elapsed_ms=", logs)
+        for private_value in (filename, document_text, api_key, client.cookies.get("cwp_session")):
+            self.assertNotIn(private_value, logs)
+
+    def test_failed_embedding_logs_stage_and_class_without_private_values(self):
+        client = self.client()
+        self.assertEqual(self.upload(client, "original.pdf", "previous active document").status_code, 200)
+        previous_pdf = client.get("/api/pdf").content
+        filename = "replacement-private-name.pdf"
+        document_text = "PRIVATE_REPLACEMENT_PDF_CONTENT"
+        failure_detail = "PRIVATE_EXCEPTION_DETAIL_SENTINEL"
+
+        with mock.patch.object(server, "create_embeddings", side_effect=RuntimeError(failure_detail)):
+            with self.assertLogs("cwp", level="INFO") as captured:
+                response = self.upload(client, filename, document_text)
+
+        self.assertEqual(response.status_code, 400)
+        self.assertEqual(client.get("/api/pdf").content, previous_pdf)
+        logs = "\n".join(captured.output)
+        self.assertIn("event=stage_failure", logs)
+        self.assertIn("stage=embedding_generation", logs)
+        self.assertIn("failure_class=RuntimeError", logs)
+        self.assertIn("event=upload_failure", logs)
+        for private_value in (
+            filename,
+            document_text,
+            failure_detail,
+            client.cookies.get("cwp_session"),
+        ):
+            self.assertNotIn(private_value, logs)
 
     def test_new_session_cannot_read_or_query_another_session_document(self):
         owner, stranger = self.client(), self.client()
