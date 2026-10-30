@@ -17,6 +17,30 @@ for (let index = source.indexOf('{', start); index < source.length; index += 1) 
 }
 assert.notEqual(end, -1, 'safe JSON response helper is complete');
 const readJsonResponseSafely = new Function(`${source.slice(start, end)}; return readJsonResponseSafely;`)();
+const classifierStart = source.indexOf('    function classifyPdfUploadFailure(error, uploadRequestStarted) {');
+assert.notEqual(classifierStart, -1, 'upload failure classifier exists');
+let classifierDepth = 0;
+let classifierEnd = -1;
+for (let index = source.indexOf('{', classifierStart); index < source.length; index += 1) {
+    if (source[index] === '{') classifierDepth += 1;
+    if (source[index] === '}') classifierDepth -= 1;
+    if (classifierDepth === 0) {
+        classifierEnd = index + 1;
+        break;
+    }
+}
+assert.notEqual(classifierEnd, -1, 'upload failure classifier is complete');
+const classifyPdfUploadFailure = new Function(
+    `${source.slice(classifierStart, classifierEnd)}; return classifyPdfUploadFailure;`
+)();
+assert.equal(classifyPdfUploadFailure({ name: 'AbortError' }, true), 'aborted_request');
+assert.equal(classifyPdfUploadFailure({ name: 'TypeError' }, true), 'network_rejection');
+assert.equal(classifyPdfUploadFailure(new Error('preparation failed'), false), 'client_preflight_failure');
+assert.match(source, /logPdfUploadOutcome\('server_success'/, 'backend-confirmed success is logged');
+assert.match(source, /logPdfUploadOutcome\(res\.ok \? 'server_rejection' : 'http_error'/,
+    'HTTP and application rejection responses are logged separately');
+assert.match(source, /console\.warn\(`\[pdf-upload\] \$\{details\}`\)/,
+    'client diagnostics omit exception text and upload contents');
 const successPathStart = source.indexOf('if (res.ok && data.success) {', source.indexOf('async function handlePdfFileUpload'));
 const documentUpdate = source.indexOf('updateDocumentUI(data.document);', successPathStart);
 const freshConversation = source.indexOf('createNewConversation();', successPathStart);

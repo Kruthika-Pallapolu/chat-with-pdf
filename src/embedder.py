@@ -25,7 +25,7 @@ _model = None
 _model_load_lock = threading.Lock()
 _model_inference_lock = threading.Lock()
 DEFAULT_EMBEDDING_BATCH_SIZE = 8
-SUPPORTED_EMBEDDING_BATCH_SIZES = frozenset((8, 12))
+SUPPORTED_EMBEDDING_BATCH_SIZES = frozenset((4, 8, 12))
 logger = logging.getLogger("cwp")
 
 

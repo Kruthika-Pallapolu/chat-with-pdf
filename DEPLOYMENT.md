@@ -28,28 +28,28 @@ Set these deployment variables in the hosting platform's environment settings (d
 
 For a 512 MB instance, also keep `CWP_NATIVE_THREAD_LIMIT=1`, `MAX_CONCURRENT_MODEL_REQUESTS=1`, `MAX_CONCURRENT_PDF_PROCESSES=1`, and `MAX_CONCURRENT_DOCUMENT_LOADS=1`. These values bound native thread pools and memory-heavy work across sessions; increasing them can increase peak memory.
 
-`CWP_EMBEDDING_BATCH_SIZE` is optional and defaults to `8`. The only accepted values are `8` and `12`; malformed or unsupported values log a generic warning and fall back to `8`. It is read at process startup and changes embedding microbatching only; it does not change the model or vector settings.
+`CWP_EMBEDDING_BATCH_SIZE` is optional and defaults to `8`. The only accepted values are `4`, `8`, and `12`; malformed or unsupported values log a generic warning and fall back to `8`. It is read at process startup and changes embedding microbatching only; it does not change the model or vector settings.
 
 ## Embedding batch A/B benchmark
 
-`CWP_EMBEDDING_BATCH_SIZE` accepts only `8` or `12`, is read at process startup, and defaults safely to `8` when unset or invalid. Keep the production service unset or set to `8`; use a separate Render staging service for comparison. The embedding log includes the selected batch size, elapsed time, and `process_peak_rss_mb`. That RSS is the process-lifetime high-water mark from Python's `resource` API, not a per-call peak; it can be unavailable on platforms without that API and can include memory used before the current upload.
+`CWP_EMBEDDING_BATCH_SIZE` accepts only `4`, `8`, or `12`, is read at process startup, and defaults safely to `8` when unset or invalid. Keep the production service unset or set to `8`; use a separate Render staging service for comparison. The embedding log includes the selected batch size, elapsed time, and `process_peak_rss_mb`. That RSS is the process-lifetime high-water mark from Python's `resource` API, not a per-call peak; it can be unavailable on platforms without that API and can include memory used before the current upload.
 
 For a reproducible Render comparison:
 
 1. From the reviewed production base, create and push a benchmark branch containing only the intended files (do not add local backups):
 
    ```sh
-   git switch -c benchmark/embedding-batch-8-vs-12
+   git switch -c benchmark/embedding-batch-8-vs-4
    git add .env.example DEPLOYMENT.md server.py src/embedder.py tests/test_citations.py tests/test_embedder.py
    git commit -m "Make embedding batch size configurable for benchmark"
-   git push -u origin benchmark/embedding-batch-8-vs-12
+   git push -u origin benchmark/embedding-batch-8-vs-4
    ```
 
-2. In the Render Dashboard, create a separate web service from the same repository and select `benchmark/embedding-batch-8-vs-12` as its branch. Use the same instance size and runtime settings as production, a separate persistent disk, and a staging hostname in `ALLOWED_HOSTS`. Copy required environment values directly in Render, but do not point staging at production data or expose secrets in logs.
+2. In the Render Dashboard, create a separate web service from the same repository and select `benchmark/embedding-batch-8-vs-4` as its branch. Use the same instance size and runtime settings as production, a separate persistent disk, and a staging hostname in `ALLOWED_HOSTS`. Copy required environment values directly in Render, but do not point staging at production data or expose secrets in logs.
 3. In the staging service environment, set `CWP_EMBEDDING_BATCH_SIZE=8`, save, and wait for the deploy to finish. Upload the same PDF twice: the first upload warms the model; record the second upload's `pdf_processing stage=embedding_generation` log line and memory metrics.
-4. Change only `CWP_EMBEDDING_BATCH_SIZE` to `12`, save, and wait for the restart/deploy. Upload that same PDF twice again; record the second upload's log line and memory metrics. Keep the service awake between the two uploads in each pair and avoid other requests during the measurement window.
+4. Change only `CWP_EMBEDDING_BATCH_SIZE` to `4`, save, and wait for the restart/deploy. Upload that same PDF twice again; record the second upload's log line and memory metrics. Keep the service awake between the two uploads in each pair and avoid other requests during the measurement window.
 5. Compare `chunks`, `batch_size`, and `duration_ms` in the logs. Compare the process high-water value as a secondary signal. In the Render Dashboard, open the staging service's **Metrics** page and inspect the CPU and memory graphs over the upload windows; use the same graph range and view the memory value or percent consistently for both runs. Render's [service metrics](https://render.com/docs/service-metrics) show service memory over time, so correlate the graph with the logs and do not treat it as a precise per-request peak.
-6. Leave production at batch size `8`. Do not promote batch size `12` unless the measured latency and memory headroom are acceptable.
+6. Leave production at batch size `8`. Treat batch size `4` as a staging benchmark until the measured latency and memory headroom are acceptable.
 
 The app's existing upload rate limit allows five uploads per hour by default, so the two warm-up/measurement pairs fit within one hour. For more repetitions, wait for the rate-limit window to roll over or change the limit only on the isolated benchmark service.
 

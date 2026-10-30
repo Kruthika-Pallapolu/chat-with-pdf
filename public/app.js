@@ -1370,6 +1370,25 @@ let citationPendingHighlight = null;
         });
     }
 
+    function classifyPdfUploadFailure(error, uploadRequestStarted) {
+        if (error?.name === 'AbortError') return 'aborted_request';
+        return uploadRequestStarted ? 'network_rejection' : 'client_preflight_failure';
+    }
+
+    function logPdfUploadOutcome(outcome, startedAt, statusCode = null) {
+        const elapsedMs = startedAt === null ? null : Math.max(0, Date.now() - startedAt);
+        const details = [
+            `outcome=${outcome}`,
+            ...(statusCode === null ? [] : [`http_status=${statusCode}`]),
+            ...(elapsedMs === null ? [] : [`elapsed_ms=${elapsedMs}`]),
+        ].join(' ');
+        if (outcome === 'server_success') {
+            console.info(`[pdf-upload] ${details}`);
+        } else {
+            console.warn(`[pdf-upload] ${details}`);
+        }
+    }
+
     async function handlePdfFileUpload(file) {
         if (pdfUploadInProgress) {
             showGlobalAlert('A PDF upload is already being processed.', 'warning');
@@ -1384,6 +1403,7 @@ let citationPendingHighlight = null;
         setPdfUploadStatus('preparing', `Preparing PDF upload… ${file.name}`);
         const formData = new FormData();
         formData.append('file', file);
+        let uploadRequestStartedAt = null;
         let polling = true;
         let uploadSettled = false;
         const pollUploadStage = async () => {
@@ -1414,6 +1434,7 @@ let citationPendingHighlight = null;
             await conversationStateReady;
             await conversationSaveQueue.catch(() => {});
             setPdfUploadStatus('uploading', `Uploading PDF… ${file.name}`);
+            uploadRequestStartedAt = Date.now();
             const uploadRequest = fetch('/api/upload', {
                 method: 'POST',
                 body: formData
@@ -1425,6 +1446,7 @@ let citationPendingHighlight = null;
 
             const data = await readJsonResponseSafely(res) || {};
             if (res.ok && data.success) {
+                logPdfUploadOutcome('server_success', uploadRequestStartedAt, res.status);
                 documentRevision += 1;
                 conversations = [];
                 activeConversationId = null;
@@ -1437,6 +1459,7 @@ let citationPendingHighlight = null;
                     console.error('PDF preview could not be loaded:', renderError);
                 }
             } else {
+                logPdfUploadOutcome(res.ok ? 'server_rejection' : 'http_error', uploadRequestStartedAt, res.status);
                 const errorMessage = res.status === 502 || res.status === 503 || res.status === 504
                     ? `The upload service returned HTTP ${res.status}. Reload to verify the active PDF before retrying.`
                     : data.detail || `PDF upload failed (HTTP ${res.status}).`;
@@ -1444,7 +1467,7 @@ let citationPendingHighlight = null;
                 showGlobalAlert(errorMessage, 'error');
             }
         } catch (err) {
-            console.error('PDF upload error:', err);
+            logPdfUploadOutcome(classifyPdfUploadFailure(err, uploadRequestStartedAt !== null), uploadRequestStartedAt);
             const errorMessage = 'Upload completion could not be confirmed. Check the active PDF before retrying.';
             setPdfUploadStatus('error', errorMessage);
             showGlobalAlert(errorMessage, 'error');

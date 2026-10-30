@@ -68,7 +68,7 @@ class EmbeddingModelLifecycleTests(unittest.TestCase):
         self.assertTrue(all(kwargs["show_progress_bar"] is False for kwargs in observed_kwargs))
 
     def test_embedding_batch_size_allows_benchmark_values_and_defaults_on_invalid_values(self):
-        for raw_value, expected in (("8", 8), ("12", 12), (" 12 ", 12)):
+        for raw_value, expected in (("4", 4), ("8", 8), ("12", 12), (" 12 ", 12)):
             with self.subTest(raw_value=raw_value):
                 self.assertEqual(embedder._parse_embedding_batch_size(raw_value), expected)
         for raw_value in ("", "invalid", "0", "-1", "16"):
@@ -76,6 +76,8 @@ class EmbeddingModelLifecycleTests(unittest.TestCase):
                 self.assertEqual(embedder._parse_embedding_batch_size(raw_value), 8)
         with mock.patch.dict(os.environ, {"CWP_EMBEDDING_BATCH_SIZE": "12"}):
             self.assertEqual(embedder._configured_embedding_batch_size(), 12)
+        with mock.patch.dict(os.environ, {"CWP_EMBEDDING_BATCH_SIZE": "4"}):
+            self.assertEqual(embedder._configured_embedding_batch_size(), 4)
         with mock.patch.dict(os.environ, {"CWP_EMBEDDING_BATCH_SIZE": "invalid"}):
             self.assertEqual(embedder._configured_embedding_batch_size(), 8)
 

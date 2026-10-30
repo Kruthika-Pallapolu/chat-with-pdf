@@ -4,6 +4,7 @@ import shutil
 import logging
 import tempfile
 import threading
+from contextvars import ContextVar
 import json
 import secrets
 import time
@@ -340,6 +341,89 @@ if not logger.handlers:
     logger.addHandler(_cwp_handler)
 logger.propagate = False
 
+_UPLOAD_DIAGNOSTIC_CONTEXT = ContextVar("cwp_upload_diagnostic_context", default=None)
+_UPLOAD_DIAGNOSTIC_REQUEST_ID = re.compile(
+    r"^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}(?:-[0-9a-fA-F]{4}-[0-9a-fA-F]{12})?$"
+)
+
+
+def _upload_diagnostic_context(request):
+    provided_id = request.headers.get("Rndr-Id", "")
+    if _UPLOAD_DIAGNOSTIC_REQUEST_ID.fullmatch(provided_id):
+        request_id, request_id_source = provided_id, "render"
+    else:
+        request_id, request_id_source = secrets.token_hex(12), "generated"
+    context = {
+        "request_id": request_id,
+        "request_id_source": request_id_source,
+        "started": time.perf_counter(),
+        "stage": "request_validation",
+    }
+    request.state.cwp_upload_diagnostic = context
+    return context
+
+
+def _log_upload_diagnostic(context, event, outcome, stage_started=None, **fields):
+    if context is None:
+        return
+
+    now = time.perf_counter()
+    elapsed_ms = 0.0 if stage_started is None else (now - stage_started) * 1000
+    request_elapsed_ms = (now - context["started"]) * 1000
+    safe_fields = []
+    for key in ("http_status", "file_bytes", "pages", "chunks", "batch_size"):
+        value = fields.get(key)
+        if isinstance(value, (int, float)) and not isinstance(value, bool):
+            safe_fields.append(f"{key}={value}")
+    for key in ("stage", "failure_stage", "failure_class"):
+        value = fields.get(key)
+        if isinstance(value, str) and re.fullmatch(r"[A-Za-z][A-Za-z0-9_]{0,63}", value):
+            safe_fields.append(f"{key}={value}")
+    suffix = " " + " ".join(safe_fields) if safe_fields else ""
+    logger.info(
+        "upload_diagnostic event=%s request_id=%s request_id_source=%s outcome=%s elapsed_ms=%.2f request_elapsed_ms=%.2f%s",
+        event,
+        context["request_id"],
+        context["request_id_source"],
+        outcome,
+        elapsed_ms,
+        request_elapsed_ms,
+        suffix,
+    )
+
+
+def _finish_upload_diagnostic_stage(stage, started, **fields):
+    context = _UPLOAD_DIAGNOSTIC_CONTEXT.get()
+    error = sys.exc_info()[1]
+    if context is not None:
+        context["stage"] = stage
+    if error is not None:
+        _log_upload_diagnostic(
+            context,
+            "stage_failure",
+            "failure",
+            started,
+            stage=stage,
+            failure_class=type(error).__name__,
+            **fields,
+        )
+    else:
+        _log_upload_diagnostic(context, f"{stage}_completed", "success", started, stage=stage, **fields)
+
+
+def _record_upload_response(context, response):
+    if context is not None:
+        status_code = int(response.status_code)
+        _log_upload_diagnostic(
+            context,
+            "response_started",
+            "success" if status_code < 400 else "failure",
+            context["started"],
+            http_status=status_code,
+            failure_stage=context.get("stage", "request") if status_code >= 400 else None,
+        )
+    return response
+
 
 def _process_peak_rss_mb():
     """Return the process high-water RSS in MiB when the platform exposes it."""
@@ -364,6 +448,8 @@ def _build_document_state(pdf_path: str, filename: str):
 
 def _build_document_state_impl(pdf_path: str, filename: str):
     total_started = time.perf_counter()
+    diagnostic_context = _UPLOAD_DIAGNOSTIC_CONTEXT.get()
+    processing_outcome = "failure"
     page_count = 0
     chunk_count = 0
     module_heading_count = 0
@@ -386,6 +472,7 @@ def _build_document_state_impl(pdf_path: str, filename: str):
                 "pdf_processing stage=validation_hash duration_ms=%.2f",
                 (time.perf_counter() - stage_started) * 1000,
             )
+            _finish_upload_diagnostic_stage("validation", stage_started)
 
         stage_started = time.perf_counter()
         try:
@@ -399,6 +486,7 @@ def _build_document_state_impl(pdf_path: str, filename: str):
                 page_count,
                 (time.perf_counter() - stage_started) * 1000,
             )
+            _finish_upload_diagnostic_stage("text_extraction", stage_started)
 
         stage_started = time.perf_counter()
         try:
@@ -413,6 +501,7 @@ def _build_document_state_impl(pdf_path: str, filename: str):
                 chunk_count,
                 (time.perf_counter() - stage_started) * 1000,
             )
+            _finish_upload_diagnostic_stage("chunking", stage_started, pages=page_count)
 
         stage_started = time.perf_counter()
         try:
@@ -427,6 +516,9 @@ def _build_document_state_impl(pdf_path: str, filename: str):
                 (time.perf_counter() - stage_started) * 1000,
                 f"{peak_rss_mb:.1f}" if peak_rss_mb is not None else "unavailable",
             )
+            _finish_upload_diagnostic_stage(
+                "embedding_generation", stage_started, chunks=chunk_count, batch_size=EMBEDDING_BATCH_SIZE
+            )
 
         stage_started = time.perf_counter()
         try:
@@ -438,6 +530,7 @@ def _build_document_state_impl(pdf_path: str, filename: str):
                 module_heading_count,
                 (time.perf_counter() - stage_started) * 1000,
             )
+            _finish_upload_diagnostic_stage("module_heading_detection", stage_started, pages=page_count)
 
         stage_started = time.perf_counter()
         try:
@@ -450,8 +543,11 @@ def _build_document_state_impl(pdf_path: str, filename: str):
                 suggested_question_count,
                 (time.perf_counter() - stage_started) * 1000,
             )
+            _finish_upload_diagnostic_stage("suggested_question_generation", stage_started, pages=page_count)
 
-        return DocumentState(
+        if diagnostic_context is not None:
+            diagnostic_context["stage"] = "document_state_assembly"
+        state = DocumentState(
             filename=filename,
             pdf_path=pdf_path,
             pdf_hash=current_hash,
@@ -463,6 +559,18 @@ def _build_document_state_impl(pdf_path: str, filename: str):
             suggested_questions=suggested_q,
             is_ready=True,
         )
+        processing_outcome = "success"
+        return state
+    except Exception as error:
+        _log_upload_diagnostic(
+            diagnostic_context,
+            "document_processing_failure",
+            "failure",
+            total_started,
+            failure_stage=(diagnostic_context or {}).get("stage", "document_processing"),
+            failure_class=type(error).__name__,
+        )
+        raise
     finally:
         logger.info(
             "pdf_processing stage=total duration_ms=%.2f pages=%d chunks=%d module_headings=%d suggested_questions=%d",
@@ -471,6 +579,14 @@ def _build_document_state_impl(pdf_path: str, filename: str):
             chunk_count,
             module_heading_count,
             suggested_question_count,
+        )
+        _log_upload_diagnostic(
+            diagnostic_context,
+            "document_processing_complete",
+            processing_outcome,
+            total_started,
+            pages=page_count,
+            chunks=chunk_count,
         )
 
 
@@ -508,28 +624,35 @@ def _request_allowed(request, session_id, action, limit, window_seconds=60):
 
 @app.middleware("http")
 async def session_security_middleware(request: Request, call_next):
+    is_upload_request = request.method == "POST" and request.url.path == "/api/upload"
+    upload_context = _upload_diagnostic_context(request) if is_upload_request else None
+    if upload_context is not None:
+        _log_upload_diagnostic(upload_context, "request_received", "started", upload_context["started"])
+
     request_host = request.headers.get("host", "").split(":", 1)[0].lower()
     if request_host not in ALLOWED_HOSTS:
-        return JSONResponse(status_code=400, content={"detail": "Request host is not allowed."})
+        return _record_upload_response(upload_context, JSONResponse(status_code=400, content={"detail": "Request host is not allowed."}))
     if request.url.path.startswith("/api/") or request.url.path == "/":
         content_length = request.headers.get("content-length")
         if content_length:
             try:
                 declared_size = int(content_length)
             except ValueError:
-                return JSONResponse(status_code=400, content={"detail": "Invalid request size."})
+                return _record_upload_response(upload_context, JSONResponse(status_code=400, content={"detail": "Invalid request size."}))
             path_limit = MAX_PDF_BYTES + 1024 * 1024 if request.url.path == "/api/upload" else 8 * 1024 * 1024
             if declared_size < 0 or declared_size > path_limit:
-                return JSONResponse(status_code=413, content={"detail": "Request exceeds the configured size limit."})
+                return _record_upload_response(upload_context, JSONResponse(status_code=413, content={"detail": "Request exceeds the configured size limit."}))
         if request.method not in {"GET", "HEAD", "OPTIONS"}:
             origin = request.headers.get("origin")
             if not origin:
-                return JSONResponse(status_code=403, content={"detail": "Request origin is required."})
+                return _record_upload_response(upload_context, JSONResponse(status_code=403, content={"detail": "Request origin is required."}))
             from urllib.parse import urlsplit
             parsed_origin = urlsplit(origin)
             if parsed_origin.scheme not in {"http", "https"} or parsed_origin.netloc.lower() != request.headers.get("host", "").lower():
-                return JSONResponse(status_code=403, content={"detail": "Cross-origin request rejected."})
+                return _record_upload_response(upload_context, JSONResponse(status_code=403, content={"detail": "Cross-origin request rejected."}))
         try:
+            if upload_context is not None:
+                upload_context["stage"] = "session_validation"
             store = get_session_store()
             presented_token = request.cookies.get(SESSION_COOKIE_NAME)
             try:
@@ -538,21 +661,34 @@ async def session_security_middleware(request: Request, call_next):
                 if request.url.path != "/" or request.method != "GET":
                     response = JSONResponse(status_code=401, content={"detail": "Session expired. Refresh the page to continue."})
                     response.delete_cookie(SESSION_COOKIE_NAME, path="/")
-                    return response
+                    return _record_upload_response(upload_context, response)
                 session = store.resolve()
             if session.created:
                 host = request.client.host if request.client else "unknown"
                 if not store.allow_ip_request(host, "new-session", int(os.getenv("MAX_NEW_SESSIONS_PER_MINUTE", "20"))):
                     store.delete_session(session.session_id)
-                    return JSONResponse(status_code=429, content={"detail": "Session creation limit reached. Please wait and retry."})
+                    return _record_upload_response(upload_context, JSONResponse(status_code=429, content={"detail": "Session creation limit reached. Please wait and retry."}))
         except SessionCapacityError:
-            return JSONResponse(status_code=503, content={"detail": "Temporary session capacity reached."})
+            return _record_upload_response(upload_context, JSONResponse(status_code=503, content={"detail": "Temporary session capacity reached."}))
         request.state.cwp_session = session
+        if upload_context is not None:
+            upload_context["stage"] = "multipart_parsing_or_route"
         try:
             response = await call_next(request)
         except Exception as error:
             logger.error("Unhandled request failure (%s).", type(error).__name__)
-            return JSONResponse(status_code=500, content={"detail": "The request could not be completed."})
+            response = JSONResponse(status_code=500, content={"detail": "The request could not be completed."})
+            if upload_context is not None:
+                _log_upload_diagnostic(
+                    upload_context,
+                    "request_failure",
+                    "failure",
+                    upload_context["started"],
+                    failure_stage="middleware_or_route",
+                    failure_class=type(error).__name__,
+                    http_status=500,
+                )
+            return _record_upload_response(upload_context, response)
         if session.created or session.rotated:
             secure_cookie = IS_PRODUCTION or request.url.scheme == "https"
             response.set_cookie(
@@ -585,7 +721,7 @@ async def session_security_middleware(request: Request, call_next):
         )
         if request.url.scheme == "https":
             response.headers["Strict-Transport-Security"] = "max-age=31536000; includeSubDomains"
-        return response
+        return _record_upload_response(upload_context, response)
     return await call_next(request)
 
 class QuestionRequest(BaseModel):
@@ -819,17 +955,45 @@ def get_active_pdf(request: Request):
 @app.post("/api/upload")
 def upload_pdf(request: Request, file: UploadFile = File(...)):
     """Upload a new PDF document and process it through the existing RAG pipeline."""
-    session_id = _request_session(request).session_id
-    _request_allowed(request, session_id, "upload", int(os.getenv("MAX_UPLOADS_PER_HOUR", "5")), 3600)
-    filename = os.path.basename((file.filename or "").replace("\\", "/"))
-    if not filename.lower().endswith(".pdf"):
-        raise HTTPException(status_code=400, detail="Only PDF files are supported.")
-    if getattr(file, "size", None) is not None and file.size > MAX_PDF_BYTES:
-        raise HTTPException(status_code=413, detail="PDF exceeds the configured upload size limit.")
-
-    session_dir = get_session_store().session_dir(session_id)
+    diagnostic_context = getattr(request.state, "cwp_upload_diagnostic", None)
+    context_token = _UPLOAD_DIAGNOSTIC_CONTEXT.set(diagnostic_context)
+    _log_upload_diagnostic(diagnostic_context, "handler_entry", "entered")
+    _log_upload_diagnostic(
+        diagnostic_context,
+        "multipart_file_received",
+        "success",
+        diagnostic_context["started"] if diagnostic_context is not None else None,
+        file_bytes=getattr(file, "size", None),
+    )
+    session_id = None
     staged_path = None
+    stage = "session_validation"
     try:
+        session_id = _request_session(request).session_id
+        _request_allowed(request, session_id, "upload", int(os.getenv("MAX_UPLOADS_PER_HOUR", "5")), 3600)
+        stage_started = time.perf_counter()
+        stage = "input_validation"
+        if diagnostic_context is not None:
+            diagnostic_context["stage"] = stage
+        filename = os.path.basename((file.filename or "").replace("\\", "/"))
+        if not filename.lower().endswith(".pdf"):
+            raise HTTPException(status_code=400, detail="Only PDF files are supported.")
+        if getattr(file, "size", None) is not None and file.size > MAX_PDF_BYTES:
+            raise HTTPException(status_code=413, detail="PDF exceeds the configured upload size limit.")
+        _log_upload_diagnostic(
+            diagnostic_context,
+            "input_validation_completed",
+            "success",
+            stage_started,
+            http_status=200,
+            file_bytes=getattr(file, "size", None),
+        )
+
+        session_dir = get_session_store().session_dir(session_id)
+        stage_started = time.perf_counter()
+        stage = "file_staging"
+        if diagnostic_context is not None:
+            diagnostic_context["stage"] = stage
         with get_session_store().lock_for(session_id):
             _set_upload_progress(session_id, "uploading")
             descriptor, staged_path = tempfile.mkstemp(prefix=".cwp-upload-", suffix=".pdf", dir=session_dir)
@@ -843,11 +1007,53 @@ def upload_pdf(request: Request, file: UploadFile = File(...)):
                     if total_bytes > MAX_PDF_BYTES:
                         raise HTTPException(status_code=413, detail="PDF exceeds the configured upload size limit.")
                     buffer.write(chunk)
+            _log_upload_diagnostic(
+                diagnostic_context,
+                "staged_file_written",
+                "success",
+                stage_started,
+                file_bytes=total_bytes,
+            )
             _set_upload_progress(session_id, "processing")
+            stage = "document_processing"
+            if diagnostic_context is not None:
+                diagnostic_context["stage"] = stage
             candidate = _build_document_state(staged_path, filename)
-            _store_document_state(session_id, candidate)
-            get_session_store().set_conversations(session_id, [])
+            stage = "document_persistence"
+            if diagnostic_context is not None:
+                diagnostic_context["stage"] = stage
+            stage_started = time.perf_counter()
+            try:
+                _store_document_state(session_id, candidate)
+                get_session_store().set_conversations(session_id, [])
+            except Exception as error:
+                _log_upload_diagnostic(
+                    diagnostic_context,
+                    "stage_failure",
+                    "failure",
+                    stage_started,
+                    stage="document_persistence",
+                    failure_class=type(error).__name__,
+                )
+                raise
+            else:
+                _log_upload_diagnostic(
+                    diagnostic_context,
+                    "document_persistence_completed",
+                    "success",
+                    stage_started,
+                    stage="document_persistence",
+                )
 
+            stage = "success_response_preparation"
+            if diagnostic_context is not None:
+                diagnostic_context["stage"] = stage
+            _log_upload_diagnostic(
+                diagnostic_context,
+                "success_response_prepared",
+                "success",
+                http_status=200,
+            )
             return {
                 "success": True,
                 "message": f"Successfully loaded and indexed '{filename}'.",
@@ -858,17 +1064,50 @@ def upload_pdf(request: Request, file: UploadFile = File(...)):
                     "hash": candidate.pdf_hash,
                 }
             }
-    except HTTPException:
+    except HTTPException as error:
+        _log_upload_diagnostic(
+            diagnostic_context,
+            "upload_failure",
+            "failure",
+            failure_stage=(diagnostic_context or {}).get("stage", stage),
+            failure_class=type(error).__name__,
+            http_status=error.status_code,
+        )
         raise
     except PdfLimitError as error:
+        _log_upload_diagnostic(
+            diagnostic_context,
+            "upload_failure",
+            "failure",
+            failure_stage=(diagnostic_context or {}).get("stage", stage),
+            failure_class=type(error).__name__,
+            http_status=413,
+        )
         raise HTTPException(status_code=413, detail=str(error)) from None
     except SessionStorageLimitError as error:
+        _log_upload_diagnostic(
+            diagnostic_context,
+            "upload_failure",
+            "failure",
+            failure_stage=(diagnostic_context or {}).get("stage", stage),
+            failure_class=type(error).__name__,
+            http_status=507,
+        )
         raise HTTPException(status_code=507, detail=str(error)) from None
     except Exception as error:
         logger.error("PDF upload failed (%s).", type(error).__name__)
+        _log_upload_diagnostic(
+            diagnostic_context,
+            "upload_failure",
+            "failure",
+            failure_stage=(diagnostic_context or {}).get("stage", stage),
+            failure_class=type(error).__name__,
+            http_status=400,
+        )
         raise HTTPException(status_code=400, detail="PDF processing failed. Verify the file is readable and not encrypted.") from None
     finally:
-        _set_upload_progress(session_id, None)
+        if session_id is not None:
+            _set_upload_progress(session_id, None)
         if staged_path:
             try:
                 os.unlink(staged_path)
@@ -876,6 +1115,14 @@ def upload_pdf(request: Request, file: UploadFile = File(...)):
                 pass
             except OSError as error:
                 logger.error("Could not remove staged PDF upload (%s).", type(error).__name__)
+                _log_upload_diagnostic(
+                    diagnostic_context,
+                    "upload_cleanup_failure",
+                    "failure",
+                    failure_stage="cleanup",
+                    failure_class=type(error).__name__,
+                )
+        _UPLOAD_DIAGNOSTIC_CONTEXT.reset(context_token)
 
 @app.delete("/api/document")
 def remove_document(request: Request):
