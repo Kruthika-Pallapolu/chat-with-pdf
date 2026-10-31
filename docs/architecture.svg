@@ -1,0 +1,72 @@
+
+<svg xmlns="http://www.w3.org/2000/svg" width="1000" height="1050" viewBox="0 0 1000 1050">
+  <defs>
+    <marker id="arrow" markerWidth="9" markerHeight="9" refX="7" refY="4" orient="auto">
+      <path d="M0 0 L8 4 L0 8" fill="none" stroke="#94A3B8" stroke-width="1.4"/>
+    </marker>
+    <style>
+      .heading { font: 700 23px Arial, sans-serif; fill: #F8FAFC; }
+      .section { font: 700 14px Arial, sans-serif; letter-spacing: 1.5px; }
+      .node { fill: #151E2D; stroke: #334155; stroke-width: 1.4; }
+      .node-title { font: 600 17px Arial, sans-serif; fill: #F1F5F9; }
+      .node-sub { font: 13px Arial, sans-serif; fill: #94A3B8; }
+      .arrow { stroke: #94A3B8; stroke-width: 1.7; fill: none; marker-end: url(#arrow); }
+      .small { font: 12px Arial, sans-serif; fill: #94A3B8; }
+    </style>
+  </defs>
+
+  <rect width="1000" height="1050" rx="20" fill="#0B1120"/>
+  <text x="500" y="48" text-anchor="middle" class="heading">CWP — System Architecture</text>
+  <text x="500" y="75" text-anchor="middle" class="small">Retrieval-Augmented Generation Pipeline</text>
+
+  <rect x="55" y="105" width="890" height="390" rx="15" fill="#102033" stroke="#2563EB" stroke-opacity=".6"/>
+  <text x="85" y="140" class="section" fill="#60A5FA">01 / DOCUMENT INGESTION</text>
+
+  <g>
+    <rect x="275" y="165" width="450" height="55" rx="9" class="node"/>
+    <text x="500" y="199" text-anchor="middle" class="node-title">PDF Upload</text>
+    <path d="M500 220 V244" class="arrow"/>
+
+    <rect x="275" y="250" width="450" height="55" rx="9" class="node"/>
+    <text x="500" y="274" text-anchor="middle" class="node-title">Text Extraction</text>
+    <text x="500" y="293" text-anchor="middle" class="node-sub">PyMuPDF</text>
+    <path d="M500 305 V329" class="arrow"/>
+
+    <rect x="275" y="335" width="450" height="55" rx="9" class="node"/>
+    <text x="500" y="369" text-anchor="middle" class="node-title">Text Chunking</text>
+    <path d="M500 390 V414" class="arrow"/>
+
+    <rect x="275" y="420" width="450" height="55" rx="9" class="node"/>
+    <text x="500" y="444" text-anchor="middle" class="node-title">Embedding Generation</text>
+    <text x="500" y="463" text-anchor="middle" class="node-sub">Sentence Transformers · all-MiniLM-L6-v2</text>
+  </g>
+
+  <path d="M500 475 V525" class="arrow"/>
+
+  <rect x="275" y="532" width="450" height="65" rx="10" fill="#172B3D" stroke="#0EA5A4" stroke-width="1.6"/>
+  <text x="500" y="559" text-anchor="middle" class="node-title">Document Vector Index</text>
+  <text x="500" y="580" text-anchor="middle" class="node-sub">Document-specific retrieval index</text>
+
+  <rect x="55" y="625" width="890" height="360" rx="15" fill="#10251F" stroke="#059669" stroke-opacity=".65"/>
+  <text x="85" y="660" class="section" fill="#34D399">02 / RETRIEVAL &amp; ANSWER GENERATION</text>
+
+  <rect x="275" y="680" width="450" height="48" rx="9" class="node"/>
+  <text x="500" y="710" text-anchor="middle" class="node-title">User Question</text>
+  <path d="M500 728 V747" class="arrow"/>
+
+  <rect x="275" y="753" width="450" height="48" rx="9" class="node"/>
+  <text x="500" y="783" text-anchor="middle" class="node-title">Query Embedding</text>
+  <path d="M500 801 V820" class="arrow"/>
+
+  <rect x="275" y="826" width="450" height="55" rx="9" class="node"/>
+  <text x="500" y="849" text-anchor="middle" class="node-title">Semantic Retrieval</text>
+  <text x="500" y="869" text-anchor="middle" class="node-sub">Relevant passages from document index</text>
+
+  <path d="M725 565 H825 V853 H730" class="arrow"/>
+  <text x="838" y="705" transform="rotate(90 838 705)" class="small">Indexed embeddings</text>
+
+  <path d="M500 881 V900" class="arrow"/>
+  <text x="500" y="924" text-anchor="middle" class="node-title">Retrieved Context → Google Gemini</text>
+  <path d="M500 932 V947" class="arrow"/>
+  <text x="500" y="970" text-anchor="middle" class="node-sub">Answer + Source References → PDF Navigation &amp; Highlighting</text>
+</svg>
